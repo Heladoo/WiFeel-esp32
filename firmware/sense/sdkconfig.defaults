@@ -1,0 +1,22 @@
+# WiFeel sensor hub (XIAO ESP32-C6) — project-specific sdkconfig overrides.
+# Board/target is selected separately with `idf.py set-target esp32c6`
+# (see CLAUDE.md); this file only carries settings this project needs
+# regardless of who runs `idf.py build` next.
+
+# --- Flash / partition table ---
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# --- Console over the XIAO C6's native USB (no separate UART bridge chip;
+# see CLAUDE.md's board notes) rather than UART0, so flashing, the boot
+# log, and the esp_console REPL all share the same USB port. ---
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# --- Wi-Fi CSI ---
+CONFIG_ESP_WIFI_CSI_ENABLED=y
+
+# --- FreeRTOS tick rate: finer-grained timing for the ~10ms JOIN-mode
+# ping interval (ping_gw.c) and the 20Hz CSI resampling grid (wifeel_csi). ---
+CONFIG_FREERTOS_HZ=1000

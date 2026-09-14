@@ -1,0 +1,20 @@
+idf_component_register(
+    SRCS
+        "app_main.c"
+        "board.c"
+        "wifi_mgr.c"
+        "csi_mgr.c"
+        "ping_gw.c"
+        "console_cmds.c"
+    INCLUDE_DIRS "."
+    REQUIRES
+        "esp_wifi"
+        "esp_netif"
+        "esp_event"
+        "nvs_flash"
+        "console"
+        "lwip"
+        "esp_driver_gpio"
+        "wifeel_proto"
+        "wifeel_csi"
+)

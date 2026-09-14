@@ -1,0 +1,37 @@
+# ESP-IDF build artifacts
+build/
+sdkconfig
+sdkconfig.old
+managed_components/
+dependencies.lock
+*.map
+
+# ESP-IDF component manager caches
+**/.mypy_cache/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Recorded training data (large, private, room-specific)
+data/*
+!data/.gitkeep
+
+# Editor / OS
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Claude Code session-local state (lock files etc.) — not project content
+.claude/
+
+# Logs
+*.log
+
+# Scratch git clone used to fetch vendor/waveshare_10_lvgl_v9_test and
+# vendor/waveshare_reference (see vendor/README.md) — Windows sometimes
+# holds a file lock on it briefly after cloning; excluded defensively so a
+# leftover copy is never accidentally committed.
+vendor/waveshare_amoled_1.43/
