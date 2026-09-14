@@ -70,6 +70,21 @@ esp_err_t csi_mgr_init(void)
         return ESP_ERR_NO_MEM;
     }
 
+    /* S3 (display->hub): the hub also runs its own SoftAP that the
+     * display joins as a station (see wifi_mgr.h's AP support) — a
+     * second, independent sensing vantage point, per the plan's original
+     * multi-stream design. Target MAC is set once the display actually
+     * associates (see wifi_mgr_set_ap_peer_connected_cb in app_main.c). */
+    wifeel_csi_stream_config_t s3_cfg = {
+        .id = WIFEEL_STREAM_DISPLAY_TO_HUB,
+        .has_baseline = false,
+    };
+    tracked_stream_t *s3 = find_slot(WIFEEL_STREAM_DISPLAY_TO_HUB);
+    s3->stream = wifeel_csi_stream_init(&s3_cfg);
+    if (!s3->stream) {
+        return ESP_ERR_NO_MEM;
+    }
+
     /* Required even though the hub is (or will be) associated to an AP as
      * a STA: the CSI extraction hardware only taps frames seen via the
      * promiscuous RX path, not the normal STA data path. Confirmed against

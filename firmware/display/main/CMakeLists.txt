@@ -3,7 +3,8 @@ idf_component_register(
         "app_main.c"
         "bsp_amoled.c"
         "touch.c"
-        "espnow_test.c"
+        "link.c"
+        "ping_gw.c"
     INCLUDE_DIRS "."
     REQUIRES
         "esp_lcd"
@@ -14,4 +15,6 @@ idf_component_register(
         "esp_wifi"
         "esp_netif"
         "esp_event"
+        "lwip"
+        "wifeel_proto"
 )

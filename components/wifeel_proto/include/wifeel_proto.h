@@ -31,6 +31,22 @@ extern "C" {
  *  S2 router->display, S3 display->hub (sounding), S4 hub->display (sounding). */
 #define WIFEEL_NUM_STREAMS 4
 
+/**
+ * Fixed local Wi-Fi credentials for the hub<->display link: the hub runs
+ * its own SoftAP under this SSID/password and the display joins it as a
+ * plain station (see CLAUDE.md / docs/boards.md for why — this gives a
+ * second, independent CSI-sensing vantage point, S3, using the same
+ * proven data-frame CSI path JOIN mode already uses, unlike raw ESP-NOW
+ * broadcasts which don't produce CSI at all).
+ *
+ * This is NOT the user's home Wi-Fi network — it's a private link between
+ * WiFeel's own two boards, so hardcoding it here (one source of truth for
+ * both firmwares, instead of two hand-typed copies that could drift out
+ * of sync) is fine. Never reuse these for anything user-facing.
+ */
+#define WIFEEL_LINK_AP_SSID     "WiFeel-Link"
+#define WIFEEL_LINK_AP_PASSWORD "wifeel-sense-link"
+
 typedef enum {
     WIFEEL_STREAM_ROUTER_TO_HUB     = 0, /* S1 */
     WIFEEL_STREAM_ROUTER_TO_DISPLAY = 1, /* S2 */
@@ -150,7 +166,13 @@ typedef struct {
     uint8_t  zone_confidence;  /* 0-100 */
     float    pkt_rate[WIFEEL_NUM_STREAMS];
     float    rssi[WIFEEL_NUM_STREAMS];
+    /* Per-stream motion score (0-100) BEFORE fusion — motion_score above
+     * is the fused (max) value; this lets the display chart each stream's
+     * contribution separately. 0 on an index with no data (S2/S4 aren't
+     * implemented yet). */
+    uint8_t  motion_score_streams[WIFEEL_NUM_STREAMS];
     char     fw_version[WIFEEL_FW_VERSION_LEN + 1];
+    char     ssid[WIFEEL_SSID_MAX_LEN + 1]; /* the network the hub is sensing from; empty if not connected */
 } wifeel_msg_state_t;
 
 typedef struct {

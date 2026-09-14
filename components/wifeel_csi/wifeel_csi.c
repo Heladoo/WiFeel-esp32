@@ -46,7 +46,9 @@ struct wifeel_csi_stream {
      * wifeel_csi.h's docs: at real (sparse, irregular) arrival rates the
      * ring can span many seconds, too slow for motion detection). Updated
      * once per finalized grid bucket, i.e. once per real sample, not on a
-     * fixed timer. */
+     * fixed timer. Tracks raw mean amplitude — see
+     * bucket_finalize_and_push() for why a gain-invariant alternative was
+     * tried and reverted. */
     bool     fast_jitter_has_prev;
     float    fast_jitter_prev_amp;
     float    fast_jitter_ema;
@@ -118,11 +120,29 @@ static void bucket_finalize_and_push(wifeel_csi_stream_t *s)
     int8_t mean_rssi = (int8_t)(s->bucket_sum_rssi / (int32_t)s->bucket_n);
     ring_push(s, mean_amp, mean_group, mean_rssi);
 
-    /* Fast jitter EMA: reacts on this one new real sample, not on a
-     * multi-second window. alpha=0.35 settles to ~85% of a step change
-     * within about 4 samples — at the ~3-4 Hz real-world rate this session
-     * measured, that's roughly a 1s reaction time, which is what P1
-     * (motion) needs. */
+    /* Fast jitter EMA: EMA of the change in raw mean amplitude between
+     * consecutive real samples. Reacts within a sample or two, unlike
+     * wifeel_csi_stream_get_features()'s multi-sample ring window.
+     *
+     * A gain-invariant spatial statistic (std/mean amplitude across
+     * subcarriers — "turbulence", matching francescopace/espectre's
+     * documented ALGORITHMS.md approach) was tried here and found to give
+     * ZERO response to confirmed real walk-by motion in live hardware
+     * testing, while this plain amplitude-diff approach cleanly detected
+     * two separate real walk-bys (score 13->54->18, then ->42->48) in an
+     * equally controlled test — see docs/boards.md. Best guess why
+     * turbulence didn't transfer: it assumes real per-subcarrier data
+     * with deliberate frequency spacing, but WIFEEL_CSI_SUBCARRIER_GROUPS
+     * here are arbitrary contiguous byte-chunks of a mixed-format buffer
+     * (see extract_frame_amplitude()'s SIMPLIFICATION comment) — group
+     * variance doesn't carry the spatial-frequency meaning the technique
+     * depends on with this simplified grouping. Reverted to the
+     * empirically-proven approach; gain-invariance is instead handled by
+     * motion.c's adaptive baseline tracking rather than a normalized
+     * per-sample statistic. alpha=0.35 settles to ~85% of a step change
+     * within about 4 samples — at the ~3-5 Hz real-world rate this
+     * session measured, that's roughly a 1s reaction time, which is what
+     * P1 (motion) needs. */
     if (s->fast_jitter_has_prev) {
         float diff = fabsf(mean_amp - s->fast_jitter_prev_amp);
         const float alpha = 0.35f;

@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include "esp_err.h"
 #include "esp_netif_ip_addr.h"
 
@@ -22,9 +23,28 @@ extern "C" {
 typedef void (*wifi_mgr_connected_cb_t)(void);
 void wifi_mgr_set_connected_cb(wifi_mgr_connected_cb_t cb);
 
-/** One-time setup: netif, default event loop, Wi-Fi driver in STA mode,
- *  power-save disabled (per the plan: PS off, so CSI/traffic isn't gated
- *  by modem sleep). Call once from app_main() before wifi_mgr_join(). */
+/**
+ * Registered callbacks fire when a station associates to / disassociates
+ * from the hub's own SoftAP (SSID/password: WIFEEL_LINK_AP_SSID in
+ * wifeel_proto.h — this is the hub<->display link, not the user's home
+ * network). Used to point csi_mgr's S3 stream at whichever MAC just
+ * joined. Register before wifi_mgr_init(), same reasoning as
+ * wifi_mgr_set_connected_cb.
+ */
+typedef void (*wifi_mgr_ap_peer_cb_t)(const uint8_t mac[6]);
+void wifi_mgr_set_ap_peer_connected_cb(wifi_mgr_ap_peer_cb_t cb);
+void wifi_mgr_set_ap_peer_disconnected_cb(wifi_mgr_ap_peer_cb_t cb);
+
+/**
+ * One-time setup: netif, default event loop, Wi-Fi driver in APSTA mode
+ * (both a station — for wifi_mgr_join() — and the hub's own SoftAP for
+ * the display link, simultaneously; standard ESP-IDF coexistence mode),
+ * power-save disabled (per the plan: PS off, so CSI/traffic isn't gated
+ * by modem sleep). Starts the SoftAP immediately (it doesn't wait for
+ * wifi_mgr_join()) so the display can connect to the hub regardless of
+ * whether the hub has joined a router yet. Call once from app_main()
+ * before wifi_mgr_join().
+ */
 esp_err_t wifi_mgr_init(void);
 
 /**
@@ -58,6 +78,10 @@ bool wifi_mgr_is_connected(void);
 esp_err_t wifi_mgr_get_ap_bssid(uint8_t bssid_out[6]);
 esp_err_t wifi_mgr_get_ap_channel(uint8_t *channel_out);
 esp_err_t wifi_mgr_get_gateway_ip(esp_ip4_addr_t *gw_out);
+
+/** Copies the connected network's SSID (NUL-terminated) into `out`, which
+ *  must be at least 33 bytes (32 + NUL, the 802.11 SSID max). */
+esp_err_t wifi_mgr_get_ap_ssid(char *out, size_t out_len);
 
 #ifdef __cplusplus
 }

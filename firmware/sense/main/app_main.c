@@ -12,6 +12,7 @@
 #include "csi_mgr.h"
 #include "ping_gw.h"
 #include "motion.h"
+#include "link.h"
 #include "console_cmds.h"
 
 static const char *TAG = "app_main";
@@ -52,6 +53,26 @@ static void on_wifi_connected(void)
     ESP_LOGI(TAG, "CSI+ping configured for AP " MACSTR, MAC2STR(bssid));
 }
 
+/* S3 (display->hub): fires when the display associates to / leaves the
+ * hub's own SoftAP (see wifi_mgr.h). Second, independent sensing vantage
+ * point alongside S1 — see motion.c for how the two get fused. */
+static void on_ap_peer_connected(const uint8_t mac[6])
+{
+    esp_err_t err = csi_mgr_set_source_mac(WIFEEL_STREAM_DISPLAY_TO_HUB, mac);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "csi_mgr_set_source_mac (S3) failed: %s", esp_err_to_name(err));
+    }
+    ESP_LOGI(TAG, "S3 now tracking display " MACSTR, MAC2STR(mac));
+}
+
+static void on_ap_peer_disconnected(const uint8_t mac[6])
+{
+    static const uint8_t zero_mac[6] = {0};
+    (void)mac;
+    csi_mgr_set_source_mac(WIFEEL_STREAM_DISPLAY_TO_HUB, zero_mac);
+    ESP_LOGI(TAG, "S3 stopped (display disconnected)");
+}
+
 void app_main(void)
 {
     esp_err_t err = nvs_flash_init();
@@ -63,11 +84,15 @@ void app_main(void)
 
     ESP_ERROR_CHECK(board_init());
     /* Must be registered before wifi_mgr_init() — see wifi_mgr.h — so a
-     * same-boot auto-reconnect can't fire before it's set. */
+     * same-boot auto-reconnect (or the display connecting to our SoftAP)
+     * can't fire before these are set. */
     wifi_mgr_set_connected_cb(&on_wifi_connected);
+    wifi_mgr_set_ap_peer_connected_cb(&on_ap_peer_connected);
+    wifi_mgr_set_ap_peer_disconnected_cb(&on_ap_peer_disconnected);
     ESP_ERROR_CHECK(wifi_mgr_init());
     ESP_ERROR_CHECK(csi_mgr_init());
     ESP_ERROR_CHECK(motion_init());
+    ESP_ERROR_CHECK(link_init());
 
     ESP_LOGI(TAG, "==================================================");
     ESP_LOGI(TAG, " WiFeel sense (hub)  fw=%s  target=%s", WIFEEL_SENSE_FW_VERSION, CONFIG_IDF_TARGET);

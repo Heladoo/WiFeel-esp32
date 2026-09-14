@@ -148,6 +148,156 @@ period, sensitivity to a *still* person (vs. actively moving) which is
 presence's (P2) job not motion's, or multiple simultaneous nearby Wi-Fi
 devices' own traffic adding jitter noise.
 
+### Update: algorithm revision after real-world unreliability report (same day)
+
+User-reported symptom after the above: score bouncing "8-38 quite
+randomly, when moving or when still" — the original single-test success
+didn't hold up.
+
+**Tried and reverted**: a gain-invariant "turbulence" metric (coefficient
+of variation — std/mean — of amplitude across the 8 subcarrier groups,
+matching francescopace/espectre's documented ALGORITHMS.md approach),
+replacing the temporal amplitude-diff. Verified against real hardware in
+a controlled test (user confirmed actively walking for the full window):
+**zero response** — raw_jitter stayed flat (0.02-0.19) throughout,
+despite confirmed real motion. Reverted. Best-guess reason: the technique
+assumes real per-subcarrier frequency data with deliberate spacing;
+`WIFEEL_CSI_SUBCARRIER_GROUPS` here are arbitrary contiguous byte-chunks
+of a mixed-format buffer (see `extract_frame_amplitude()`'s
+SIMPLIFICATION comment), so cross-group variance doesn't carry the
+spatial-frequency meaning the technique depends on with this simplified
+grouping. A real fix would need actual per-subcarrier decoding first —
+out of scope for now.
+
+**What actually fixed it**: kept the original (empirically-proven)
+temporal amplitude-diff jitter, and added an **adaptive noise floor** in
+`motion.c` (tracks down immediately, creeps up slowly via
+`FLOOR_CREEP_ALPHA`) — score is now `(jitter - floor) / MOTION_SCORE_DELTA_RANGE`
+rather than jitter against a fixed absolute constant. This means the
+score is self-calibrating to whatever this room/network's actual resting
+jitter level is, rather than assuming a fixed number transfers across
+different connections/environments — likely the real cause of the
+"random 8-38" complaint (different sessions' resting jitter levels
+weren't the same absolute value, so a fixed threshold produced
+inconsistent-looking scores).
+
+**Re-verified live** (multiple walk-bys, same session): baseline mostly
+0-15 at rest, four separate real motion events cleanly detected
+(peaks of 100, 57, 50, 47; clean returns to single-digit scores each
+time). Floor tracked from 0.29 to 0.89 over the ~20s test as ambient
+conditions drifted, exactly as designed.
+
+**Still not done**: `MOTION_SCORE_DELTA_RANGE`=2.5 and the enter/exit
+score thresholds (40/20) are still first-pass estimates from this one
+extended session, not validated over a long unattended period or against
+a deliberate false-positive test (e.g. leaving the room untouched for an
+hour).
+
+## Second sensing node: hub SoftAP + display STA (same day)
+
+User feedback after the above: motion score still felt unreliable, and
+correctly pointed out the system was only using one board for sensing —
+the plan's original design called for both. Fix: **the hub now runs its
+own SoftAP (`WIFEEL_LINK_AP_SSID`/`WIFEEL_LINK_AP_PASSWORD` in
+wifeel_proto.h — a fixed local credential Claude invented, NOT the user's
+home network, so no credential relay/handling problem) and the display
+joins it as a real Wi-Fi station**, `WIFI_MODE_APSTA` on the hub
+(coexists fine with its separate STA connection to the real router).
+This gives a second, independent CSI stream — S3, display→hub — using
+the same proven data-frame CSI path as S1 (JOIN mode), not raw ESP-NOW
+broadcasts (which, per the earlier DIRECT-mode finding, never produce
+CSI at all).
+
+**Verified working live**:
+- Display joins the hub's SoftAP, gets a DHCP IP (192.168.4.2), and pings
+  the hub (192.168.4.1) at 100Hz, exactly like S1's gateway-ping design.
+- Hub tracks the display's MAC as S3 automatically via
+  `WIFI_EVENT_AP_STACONNECTED` (see `wifi_mgr_set_ap_peer_connected_cb`).
+- **S3 pkt/s measured at ~100/s — roughly 25x S1's ~4/s.** Makes sense:
+  the hub-display link is short-range/strong-signal (same desk) vs. the
+  router link's greater distance/obstacles. This far exceeds the
+  original plan's "~80-100 pkt/s" target that JOIN mode alone couldn't
+  reach.
+- `motion.c` now computes a score per stream (each with its own adaptive
+  floor) and fuses by taking the max — real S3-attributed MOTION events
+  observed live (e.g. "score=76 ... S3=76/2.06/0.15" with S1 at 0),
+  confirming S3 contributes real, independent signal, not just noise.
+
+**Known rough edge, not yet root-caused**: S3's jitter/pkt-rate briefly
+went to exactly 0.00 for about 20 seconds mid-session before recovering
+on its own (confirmed via `status` before and after). Not yet understood
+— possibly a brief display-side reassociation or power-save blip. Worth
+watching for if S3 seems to "go quiet" during testing; `status` shows
+current S3 pkt/s to check.
+
+**Not done**: S4 (display running its own CSI capture on the hub's AP
+traffic, for a symmetric second measurement) — only S3 (hub-side) is
+built. The display is still a CSI *source* (via its ping traffic) but not
+yet a CSI *receiver* itself. A real "both streams must agree" fusion
+policy (vs. today's simple max) also wasn't tried — no dual-stream data
+existed yet to evaluate it against.
+
+## Per-stream calibration + trend chart + a real reliability problem (same day, later)
+
+User noticed S3's score reads persistently low relative to S1 on the new
+display chart, and asked whether that's expected. Real cause identified:
+S3 samples ~25x faster than S1 (~100Hz vs ~3-4Hz), and the fast-jitter
+metric measures change *between consecutive samples* — at a much higher
+sample rate, consecutive samples are closer together in time and
+naturally show smaller diffs for the *same* real motion. Both streams
+were sharing one `MOTION_SCORE_DELTA_RANGE` constant (calibrated from S1
+alone), unfairly compressing S3's score. Fixed: `motion.c` now takes a
+separate `delta_range` per stream (`MOTION_SCORE_DELTA_RANGE_S1` /
+`_S3`).
+
+**S3's own range is not yet properly calibrated** — attempts to gather
+clean walk-by data for it kept getting corrupted by a real, unresolved
+reliability problem (see below), so `MOTION_SCORE_DELTA_RANGE_S3` is
+still set equal to S1's value (2.5) as an explicit placeholder, not a
+measurement. Revisit once the link below is stable.
+
+**Real, unresolved problem found**: the display's connection to the
+hub's SoftAP appears to drop and silently reconnect unpredictably, not
+just after a hub reboot (where slow beacon-loss detection, default
+~25s, is an understandable explanation) but **also mid-session with
+neither board reset** — caught live via the `WIFI_EVENT_AP_STACONNECTED`
+log line ("S3 now tracking display...") appearing partway through an
+otherwise-idle test. Whenever this happens, S3's jitter/floor reset to
+exactly 0.00 until the new association's CSI stream re-accumulates
+enough history. This directly corrupted at least one calibration
+attempt. Not yet root-caused — candidates to check first: Wi-Pi power-
+save interaction despite `WIFI_PS_NONE` being set on both boards, RF
+interference/congestion on the shared channel (S1's router link is also
+on the same channel 9), or a display-side crash/watchdog reset that
+doesn't show up in a partial log capture. **Fix this before trusting any
+S3-specific tuning.**
+
+**Also done**: the hub's STATE broadcast rate was raised from 1Hz to 3Hz
+(`LINK_RATE_HZ` in firmware/sense/main/link.c) to cut hub-to-display
+display latency, and `wifeel_msg_state_t` gained a
+`motion_score_streams[]` array so the display can chart each stream's
+score separately (not just the fused number) — implemented as a live
+2-series `lv_chart` on the display's home screen, user-confirmed
+rendering correctly.
+
+**Expected detection-to-screen delay** (from the code's timing constants,
+not independently measured end-to-end): roughly up to ~1.0s for an
+S3-driven detection (dominated by the hub->display broadcast and display
+UI poll, since S3's own fast sample rate settles quickly) and up to
+~2.3s for an S1-driven detection (dominated by S1's own sparse ~3-4Hz
+sample rate, which is the bottleneck in how fast its jitter EMA can
+react at all).
+
+### Next session should start here
+1. Root-cause the display<->hub reconnection instability (see above) —
+   this blocks trustworthy S3 calibration and probably affects P2-P5
+   too, since they'll all depend on this same link.
+2. Once stable, redo the S3-focused walk-by test cleanly and set a real
+   `MOTION_SCORE_DELTA_RANGE_S3`.
+3. Consider whether the false-motion / long-idle-period behavior needs
+   validation before treating P1 as "done" (only walk-by tests exist so
+   far, no extended quiet-room test).
+
 ## Known per-unit quirks
 
 _None yet — add here as they're discovered (e.g. "HUB-1 needs

@@ -12,6 +12,42 @@ architecture, and milestone checklist live in the plan file this project was
 built from — check `docs/boards.md` for its path if it's not obvious, and
 otherwise ask the user rather than re-deriving the architecture from scratch.
 
+## Current status (see docs/boards.md for full detail)
+
+- Both boards identified, flashed, and running custom firmware (HUB-1 =
+  XIAO C6, DISP-1 = Waveshare AMOLED).
+- Hub senses two independent CSI streams: **S1** (router→hub, via
+  `wifi_mgr_join()`) and **S3** (display→hub, via the hub's own SoftAP —
+  see "Hub↔display link" below). `motion.c` fuses both into one score.
+  P1 (motion) is live-tested and working; P2-P5 (presence, count,
+  breathing, position) are not built yet.
+- Display renders a live home screen (LVGL) fed by the hub's ESP-NOW
+  STATE broadcasts: a motion indicator, fused score, and a 2-series trend
+  chart of S1 vs S3 scores.
+- **Open problem, start here next session**: the display↔hub link drops
+  and silently reconnects unpredictably, not just after a hub reboot —
+  also mid-session with nothing reset. This corrupts any attempt to
+  calibrate S3's own scoring range. See docs/boards.md's "Per-stream
+  calibration + trend chart + a real reliability problem" section for
+  what's been ruled out and what to check next.
+
+## Hub↔display link (the "second sensing node")
+
+The hub runs `WIFI_MODE_APSTA`: a station connection to the user's real
+router (for S1), *and* its own SoftAP simultaneously (SSID/password:
+`WIFEEL_LINK_AP_SSID`/`WIFEEL_LINK_AP_PASSWORD` in `wifeel_proto.h` — a
+fixed local credential, NOT the user's home network, safe to hardcode).
+The display joins that SoftAP as a plain station and pings it at 100Hz
+(`ping_gw.c`, copied from `firmware/sense`), exactly like S1's
+gateway-ping design — this is what makes S3's CSI capture work (real
+data-frame traffic), unlike the raw ESP-NOW broadcasts tried earlier,
+which never produce CSI on this hardware (see docs/boards.md's
+DIRECT-mode finding).
+
+ESP-NOW itself (broadcast, unencrypted) rides on top of this same
+association for the STATE message the display renders — that part works
+reliably; it's the underlying Wi-Fi *association* that's been dropping.
+
 ## Toolchain
 
 - **ESP-IDF v5.5.5**, installed via Espressif's EIM CLI at `C:\Espressif` (confirmed working — see `docs/boards.md`).

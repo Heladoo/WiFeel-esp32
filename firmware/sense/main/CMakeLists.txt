@@ -7,6 +7,7 @@ idf_component_register(
         "ping_gw.c"
         "espnow_rx_test.c"
         "motion.c"
+        "link.c"
         "console_cmds.c"
     INCLUDE_DIRS "."
     REQUIRES

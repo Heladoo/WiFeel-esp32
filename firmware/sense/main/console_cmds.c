@@ -162,8 +162,10 @@ static int cmd_motion(int argc, char **argv)
     }
     printf("streaming motion readings for %d s (Ctrl+C not supported here — just wait it out)\n", seconds);
     for (int i = 0; i < seconds * 1000 / 300; i++) {
-        printf("score=%3u flag=%-6s raw_jitter=%.2f\n", motion_get_score(),
-               motion_get_flag() ? "MOTION" : "still", (double)motion_get_raw_jitter());
+        printf("fused=%3u flag=%-6s | S1: score=%3u jitter=%.2f floor=%.2f | S3: score=%3u jitter=%.2f floor=%.2f\n",
+               motion_get_score(), motion_get_flag() ? "MOTION" : "still",
+               motion_get_s1_score(), (double)motion_get_raw_jitter(), (double)motion_get_floor(),
+               motion_get_s3_score(), (double)motion_get_s3_raw_jitter(), (double)motion_get_s3_floor());
         vTaskDelay(pdMS_TO_TICKS(300));
     }
     return 0;
@@ -210,8 +212,13 @@ static int cmd_status(int argc, char **argv)
     }
     printf("\n");
 
-    printf("motion:    score=%u flag=%s raw_jitter=%.2f\n", motion_get_score(),
-           motion_get_flag() ? "MOTION" : "still", (double)motion_get_raw_jitter());
+    printf("motion:    fused=%u flag=%s  (S1 score=%u jitter=%.2f floor=%.2f, S3 score=%u jitter=%.2f floor=%.2f)\n",
+           motion_get_score(), motion_get_flag() ? "MOTION" : "still",
+           motion_get_s1_score(), (double)motion_get_raw_jitter(), (double)motion_get_floor(),
+           motion_get_s3_score(), (double)motion_get_s3_raw_jitter(), (double)motion_get_s3_floor());
+
+    wifeel_csi_stream_t *s3 = csi_mgr_get_stream(WIFEEL_STREAM_DISPLAY_TO_HUB);
+    printf("S3 (display->hub): %.1f pkt/s\n", (double)wifeel_csi_stream_get_pkt_rate(s3));
     return 0;
 }
 

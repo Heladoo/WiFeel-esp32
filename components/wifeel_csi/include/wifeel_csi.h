@@ -111,12 +111,23 @@ bool wifeel_csi_stream_get_features(const wifeel_csi_stream_t *stream, wifeel_ms
 float wifeel_csi_stream_get_pkt_rate(const wifeel_csi_stream_t *stream);
 
 /**
- * Fast-reacting jitter estimate: an exponential moving average of the
- * amplitude change between consecutive real samples, updated once per
- * sample rather than over wifeel_csi_stream_get_features()'s multi-sample
- * ring window. Use this for motion detection (P1) — at real, sparse CSI
- * arrival rates (a few Hz, not the nominal 20Hz grid), the ring-buffer
- * window can span many seconds, too slow to react to someone walking by.
+ * Fast-reacting jitter estimate for motion detection (P1), updated once
+ * per real sample rather than over wifeel_csi_stream_get_features()'s
+ * multi-sample ring window (at real, sparse CSI arrival rates — a few Hz,
+ * not the nominal 20Hz grid — that window can span many seconds, too slow
+ * to react to someone walking by).
+ *
+ * This is an EMA of the change in raw mean amplitude between consecutive
+ * samples. A gain-invariant alternative (spatial coefficient of variation
+ * across subcarriers, matching francescopace/espectre's documented
+ * approach) was tried and found to give zero response to confirmed real
+ * motion in live testing on this hardware — see wifeel_csi.c's
+ * bucket_finalize_and_push() and docs/boards.md for the full story. This
+ * plain amplitude-diff version is the one with actual positive evidence
+ * of detecting real walk-by motion; callers needing gain-invariance
+ * should track their own adaptive baseline (see motion.c) rather than
+ * assume this value is normalized.
+ *
  * Returns 0 before the first two samples have arrived.
  */
 float wifeel_csi_stream_get_fast_jitter(const wifeel_csi_stream_t *stream);

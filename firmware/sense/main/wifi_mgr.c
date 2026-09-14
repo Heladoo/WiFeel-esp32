@@ -5,9 +5,12 @@
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_netif.h"
+#include "esp_mac.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+
+#include "wifeel_proto.h" /* WIFEEL_LINK_AP_SSID / WIFEEL_LINK_AP_PASSWORD */
 
 static const char *TAG = "wifi_mgr";
 
@@ -20,10 +23,22 @@ static bool s_initialized;
 static bool s_connected;
 static wifi_mgr_connected_cb_t s_connected_cb;
 static bool s_auto_reconnect = true;
+static wifi_mgr_ap_peer_cb_t s_ap_peer_connected_cb;
+static wifi_mgr_ap_peer_cb_t s_ap_peer_disconnected_cb;
 
 void wifi_mgr_set_connected_cb(wifi_mgr_connected_cb_t cb)
 {
     s_connected_cb = cb;
+}
+
+void wifi_mgr_set_ap_peer_connected_cb(wifi_mgr_ap_peer_cb_t cb)
+{
+    s_ap_peer_connected_cb = cb;
+}
+
+void wifi_mgr_set_ap_peer_disconnected_cb(wifi_mgr_ap_peer_cb_t cb)
+{
+    s_ap_peer_disconnected_cb = cb;
 }
 
 void wifi_mgr_set_auto_reconnect(bool enabled)
@@ -53,6 +68,18 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
         if (s_connected_cb) {
             s_connected_cb();
         }
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STACONNECTED) {
+        const wifi_event_ap_staconnected_t *ev = (const wifi_event_ap_staconnected_t *)data;
+        ESP_LOGI(TAG, "AP: station " MACSTR " connected", MAC2STR(ev->mac));
+        if (s_ap_peer_connected_cb) {
+            s_ap_peer_connected_cb(ev->mac);
+        }
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STADISCONNECTED) {
+        const wifi_event_ap_stadisconnected_t *ev = (const wifi_event_ap_stadisconnected_t *)data;
+        ESP_LOGI(TAG, "AP: station " MACSTR " disconnected", MAC2STR(ev->mac));
+        if (s_ap_peer_disconnected_cb) {
+            s_ap_peer_disconnected_cb(ev->mac);
+        }
     }
 }
 
@@ -70,6 +97,7 @@ esp_err_t wifi_mgr_init(void)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     s_sta_netif = esp_netif_create_default_wifi_sta();
+    esp_netif_create_default_wifi_ap();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
@@ -77,7 +105,20 @@ esp_err_t wifi_mgr_init(void)
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &on_wifi_event, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &on_wifi_event, NULL));
 
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    /* APSTA: a station (for wifi_mgr_join(), the user's real router) and
+     * the hub's own SoftAP (for the display link) running simultaneously
+     * on the one radio — standard ESP-IDF coexistence mode. The SoftAP
+     * automatically follows whatever channel the STA ends up on. */
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+
+    wifi_config_t ap_config = {0};
+    strlcpy((char *)ap_config.ap.ssid, WIFEEL_LINK_AP_SSID, sizeof(ap_config.ap.ssid));
+    strlcpy((char *)ap_config.ap.password, WIFEEL_LINK_AP_PASSWORD, sizeof(ap_config.ap.password));
+    ap_config.ap.authmode = WIFI_AUTH_WPA2_PSK;
+    ap_config.ap.max_connection = 1; /* only the display is expected to join */
+    ap_config.ap.channel = 0;        /* auto — APSTA locks this to the STA's channel anyway */
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
+
     /* Power-save off: modem sleep gates both CSI capture and our high-rate
      * ping traffic (see the plan's JOIN mode design). */
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
@@ -177,5 +218,30 @@ esp_err_t wifi_mgr_get_gateway_ip(esp_ip4_addr_t *gw_out)
         return err;
     }
     *gw_out = ip_info.gw;
+    return ESP_OK;
+}
+
+esp_err_t wifi_mgr_get_ap_ssid(char *out, size_t out_len)
+{
+    if (!s_connected) {
+        return ESP_ERR_WIFI_NOT_CONNECT;
+    }
+    if (!out || out_len == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    wifi_ap_record_t ap_info;
+    esp_err_t err = esp_wifi_sta_get_ap_info(&ap_info);
+    if (err != ESP_OK) {
+        return err;
+    }
+    /* ap_info.ssid is a fixed uint8_t[33] buffer, not guaranteed
+     * NUL-terminated when the SSID uses the full 32 bytes — copy with an
+     * explicit bound and terminate ourselves rather than assuming. */
+    size_t n = sizeof(ap_info.ssid);
+    if (n > out_len - 1) {
+        n = out_len - 1;
+    }
+    memcpy(out, ap_info.ssid, n);
+    out[n] = '\0';
     return ESP_OK;
 }
