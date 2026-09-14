@@ -411,26 +411,81 @@ instability investigated (and left unresolved) earlier this session,
 and it reframes the problem from "mystery RF/firmware reliability bug"
 to "diagnostic tooling opens too many short-lived serial connections."
 
+## DTR/RTS theory tested directly, and refuted; two real bugs found and fixed instead (same day, later still)
+
+Ran a controlled experiment before doing any more calibration work:
+alternated opening COM9 with pySerial's default DTR/RTS state vs. with
+both explicitly held low *before* `open()`, 3 reps each. Result: only 1
+reboot in 6 open/close cycles, no clean split between the two
+conditions — **inconclusive**, not the confirmation expected. A
+follow-up single continuous connection held for 4 minutes straight saw
+**zero** reboots at all (clean, unbroken uptime the whole window). So
+opening a serial connection does not itself reset the hub — the DTR/RTS
+theory from the previous session's entry is **refuted**.
+
+What actually explains the earlier chaos, found while testing this:
+`run_in_background` on the agent's own Bash tool was launching each
+`tools/serial_log.py`/`send_cmd.py` command through **two different
+Python interpreters simultaneously** (confirmed via `Get-CimInstance
+Win32_Process` — identical command line, two PIDs), both fighting over
+COM9. That's a real, reproducible contributor to the earlier port
+contention. Foreground (non-backgrounded) calls don't show this.
+Practical fix: avoid `run_in_background` for anything touching a
+serial port on this machine.
+
+That same clean 4-minute capture also surfaced a **real, separate bug**:
+S1 was producing near-continuous false MOTION (~1 event per 7-8s, jitter
+up to 11) despite zero reboots — ruling out the "reboot resets the
+floor" explanation. Checking the display board (COM8) explained it:
+stuck in the same `ping_sock: send error=0` loop as before, this time
+for ~40 minutes straight, with the hub never having rebooted. Root
+mechanism, confirmed from the hub's own log: `wifi:station ... leave,
+AID = 1, reason = 15` — reason 15 is a **WPA2 4-way handshake timeout**.
+The hub's own S1 ping was *also* stuck failing (same bug, hub's own
+copy of `ping_gw.c`), spamming `esp_now_send failed:
+ESP_ERR_ESPNOW_NO_MEM` from resource exhaustion, and too busy/starved to
+complete the SoftAP handshake with the display in time — one cascading
+failure breaking both streams, not two independent ones.
+
+**Fixed on both boards**: `ping_gw.c` now tracks time since its last
+successful reply via `esp_ping`'s own `on_ping_success` callback
+(deliberately not `on_ping_timeout` — a dead link fails at the socket
+*send* itself, which doesn't reliably reach a timeout callback either).
+Each board runs a small watchdog task (`firmware/display/main/link.c`,
+`firmware/sense/main/app_main.c`'s `s1_ping_watchdog_task`) that polls
+this and forces a disconnect+reconnect after a 5s stall, rather than
+trusting `WIFI_EVENT_STA_DISCONNECTED` alone. Confirmed working live —
+watchdog fires, hub reconnects cleanly within ~1-2s each time.
+
+**New finding this exposed**: with the watchdog now recovering instead
+of hanging forever, it became visible that the hub's S1 link
+disconnects/reconnects on its own roughly **every 6-8 seconds**,
+cycling between different BSSIDs each time (`16:33:75:1c:4b:c2` /
+`32:bd:13:1e:25:85` / `12:71:b3:13:d2:84`) on a network named
+**"Amira_Guest"**. This looks like mesh/guest-network behavior (guest
+SSIDs commonly apply session limits, band-steering, or rate limits that
+a continuous 100Hz ping could be triggering), not a firmware bug — the
+watchdog now papers over it reliably, but the underlying 6-8s churn is
+still there and may need a network-side change (e.g. joining the main
+network instead of the guest one, if that's an option) rather than more
+firmware work.
+
 ### Next session should start here
-1. **Test the tooling theory directly**: instrument `tools/serial_log.py`/
-   `send_cmd.py` to log DTR/RTS state around open/close, or try opening
-   the port with `dsrdtr=False` explicitly set before any line changes,
-   and see if that prevents the reboot. If confirmed, the real fix is
-   behavioral (prefer long-lived connections, avoid rapid reconnects)
-   plus maybe a `--no-reset`-safe open mode in the tools.
-2. Once reboots are under control, redo the S3-focused walk-by test
-   cleanly and set a real `MOTION_SCORE_DELTA_RANGE_S3` (still an
-   unvalidated placeholder equal to S1's value).
-3. Redo empty-room presence calibration (the code works; just needs a
-   run that isn't interrupted by a reboot) and validate
+1. **Ask about the "Amira_Guest" network**: is the hub meant to be on a
+   guest network long-term, or would the main/home network avoid the
+   ~6-8s reconnect cycle? This is likely the actual remaining reliability
+   issue, now that both boards recover from it instead of hanging.
+2. Once the link (however it ends up configured) is stable for a
+   sustained period, redo the S3-focused walk-by test cleanly and set a
+   real `MOTION_SCORE_DELTA_RANGE_S3` (still an unvalidated placeholder
+   equal to S1's value) — per-channel validation before any fusion
+   policy changes (explicit user instruction).
+3. Redo empty-room presence calibration and validate
    `PRESENCE_WANDER_THRESHOLD_S1`/`_S3` (still placeholders) against a
-   real "person sitting still nearby" test.
-4. Decide on the S1-alone-triggers-MOTION fusion policy question raised
-   by the original baseline (4 false positives, all S1, S3 never
-   corroborating) — now better understood as likely CSI-history-reset
-   noise rather than an inherent S1 sensitivity problem, but still
-   worth a real decision once reboots are rare enough to tell the two
-   apart cleanly.
+   real "person sitting still nearby" test, one stream at a time.
+4. Only after S1 and S3 are independently validated for both motion and
+   presence: revisit the S1-alone-triggers-MOTION fusion policy question
+   from the original baseline.
 
 ## Known per-unit quirks
 

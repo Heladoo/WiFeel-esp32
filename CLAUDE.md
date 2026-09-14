@@ -27,17 +27,26 @@ otherwise ask the user rather than re-deriving the architecture from scratch.
 - P2 (presence) code is written (`presence.c`/`.h`) and verified correct
   in a clean test, but its wander thresholds are still unvalidated
   placeholders.
-- **Open problem, start here next session**: the hub reboots far more
-  often during interactive testing (rapid `send_cmd.py`/`serial_log.py`
-  calls) than during fully hands-off operation. Leading theory: the
-  XIAO C6's native-USB console shares the same DTR/RTS auto-reset
-  convenience feature `idf.py flash`/`monitor` rely on, so **any** tool
-  opening/closing a handle to its COM port can trigger a reset —
-  meaning most of what looked like a display↔hub link reliability bug
-  may actually be a side effect of how often diagnostic tools reconnect
-  to the hub's serial port, not a genuine RF/firmware defect. See
-  docs/boards.md's "Likely root cause of the reconnection instability:
-  our own tooling" section for the evidence and what to verify next.
+- The DTR/RTS reboot theory was tested directly and **refuted** — a
+  clean single connection held for 4 minutes had zero reboots. The
+  earlier instability's real causes turned out to be: (1) this agent's
+  own `run_in_background` Bash calls launching duplicate Python
+  processes that fought over the COM port, and (2) a real firmware bug,
+  now fixed — see next point.
+- **Fixed**: both boards' `ping_gw.c` could get stuck retrying a dead
+  ping forever without `WIFI_EVENT_STA_DISCONNECTED` ever firing. Both
+  now run a watchdog task that force-reconnects after a 5s stall. One
+  occurrence traced precisely: the hub's own S1 ping got stuck, starving
+  it enough to fail the SoftAP's WPA2 handshake with the display
+  (reason code 15) — breaking S3 too without the hub ever crashing.
+- **Open problem, start here next session**: with the watchdog now
+  recovering instead of hanging, it's visible that the hub's link to
+  the router disconnects/reconnects every ~6-8s on its own, cycling
+  between different BSSIDs on a network called "Amira_Guest" — looks
+  like mesh/guest-network policy (session limits, band-steering),
+  not a firmware defect. Worth asking whether the hub should join the
+  main network instead. See docs/boards.md's "DTR/RTS theory tested
+  directly, and refuted; two real bugs found and fixed instead" section.
 
 ## Hub↔display link (the "second sensing node")
 
