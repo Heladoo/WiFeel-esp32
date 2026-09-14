@@ -29,13 +29,14 @@ static tracked_stream_t *find_slot(wifeel_stream_id_t id)
     return &s_tracked[id];
 }
 
-/* TEMPORARY diagnostic (milestone 4 hardware bring-up): unconditional
- * counter + rate-limited log of every raw CSI frame's source MAC,
- * regardless of whether it matches a tracked stream — to tell apart "the
- * callback never fires" from "it fires but nothing matches our filter".
- * Remove once real hardware confirms the pkt/s pipeline end-to-end. */
-static volatile uint32_t s_debug_total_frames;
-
+/* A per-frame debug log ("raw CSI frame #N from <mac>") lived here during
+ * milestone 4 hardware bring-up, to tell apart "the callback never fires"
+ * from "it fires but nothing matches our filter" — real hardware
+ * confirmed the pipeline works end-to-end (S1 ~4 pkt/s, S3 ~100 pkt/s;
+ * see docs/boards.md), so it's removed now. It was also getting in the
+ * way of longer unattended captures at S3's rate. Re-add temporarily
+ * (rate-limited!) if diagnosing CSI capture again — don't log every frame
+ * unconditionally at 100pkt/s. */
 static void IRAM_ATTR on_csi(void *ctx, wifi_csi_info_t *data)
 {
     (void)ctx;
@@ -43,11 +44,6 @@ static void IRAM_ATTR on_csi(void *ctx, wifi_csi_info_t *data)
         return;
     }
 
-    s_debug_total_frames++;
-    if (s_debug_total_frames <= 20 || (s_debug_total_frames % 20) == 0) {
-        ESP_EARLY_LOGI(TAG, "raw CSI frame #%" PRIu32 " from " MACSTR " len=%u",
-                       s_debug_total_frames, MAC2STR(data->mac), data->len);
-    }
     for (size_t i = 0; i < WIFEEL_NUM_STREAMS; i++) {
         tracked_stream_t *t = &s_tracked[i];
         if (t->active && t->stream && memcmp(t->mac, data->mac, 6) == 0) {

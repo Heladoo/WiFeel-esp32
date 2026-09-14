@@ -7,6 +7,7 @@ idf_component_register(
         "ping_gw.c"
         "espnow_rx_test.c"
         "motion.c"
+        "presence.c"
         "link.c"
         "console_cmds.c"
     INCLUDE_DIRS "."
@@ -18,6 +19,7 @@ idf_component_register(
         "console"
         "lwip"
         "esp_driver_gpio"
+        "esp_timer"
         "wifeel_proto"
         "wifeel_csi"
 )

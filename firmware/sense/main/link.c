@@ -9,6 +9,7 @@
 #include "wifeel_proto.h"
 #include "csi_mgr.h"
 #include "motion.h"
+#include "presence.h"
 #include "wifi_mgr.h"
 #include "board.h"
 
@@ -37,12 +38,11 @@ static void link_task(void *arg)
         state.motion_score_streams[WIFEEL_STREAM_ROUTER_TO_HUB] = motion_get_s1_score();
         state.motion_score_streams[WIFEEL_STREAM_DISPLAY_TO_HUB] = motion_get_s3_score();
 
-        /* --- Placeholders (documented, not fabricated data) ---
-         * presence_state: P2 isn't built yet (no wander/hold-time logic).
-         * Deriving it from motion alone is a known-wrong approximation
-         * for today's visualization only — a still-but-present person
-         * will incorrectly show EMPTY. Replace when presence.c exists. */
-        state.presence_state = state.motion_flag ? WIFEEL_PRESENCE_MOTION : WIFEEL_PRESENCE_EMPTY;
+        /* --- Real (P2) --- */
+        state.presence_state = presence_get_state();
+
+        /* --- Placeholders (documented, not fabricated data): P3-P4 aren't
+         * built yet. --- */
         state.people_count = 0;
         state.count_confidence = 0;
         state.breathing_bpm = 0.0f;

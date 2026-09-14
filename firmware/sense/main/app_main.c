@@ -12,6 +12,7 @@
 #include "csi_mgr.h"
 #include "ping_gw.h"
 #include "motion.h"
+#include "presence.h"
 #include "link.h"
 #include "console_cmds.h"
 
@@ -92,6 +93,7 @@ void app_main(void)
     ESP_ERROR_CHECK(wifi_mgr_init());
     ESP_ERROR_CHECK(csi_mgr_init());
     ESP_ERROR_CHECK(motion_init());
+    ESP_ERROR_CHECK(presence_init());
     ESP_ERROR_CHECK(link_init());
 
     ESP_LOGI(TAG, "==================================================");

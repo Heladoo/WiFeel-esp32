@@ -18,6 +18,7 @@
 #include "ping_gw.h"
 #include "espnow_rx_test.h"
 #include "motion.h"
+#include "presence.h"
 #include "board.h"
 #include "wifeel_csi.h"
 
@@ -171,6 +172,34 @@ static int cmd_motion(int argc, char **argv)
     return 0;
 }
 
+/* Starts empty-room calibration (P2 presence needs this before wander
+ * means anything — see presence.h). Room must stay empty for the whole
+ * duration. */
+static int cmd_calib(int argc, char **argv)
+{
+    uint32_t duration_s = (argc >= 2) ? (uint32_t)atoi(argv[1]) : 30;
+    if (duration_s == 0) {
+        duration_s = 30;
+    }
+    esp_err_t err = presence_calibrate_start(duration_s * 1000);
+    if (err != ESP_OK) {
+        printf("warning: presence_calibrate_start reported %s (a stream may not be tracking "
+               "anything yet — still armed for whichever stream(s) are)\n", esp_err_to_name(err));
+    }
+    printf("calibrating for %" PRIu32 " s — leave the room empty until this finishes\n", duration_s);
+    return 0;
+}
+
+static const char *presence_state_name(wifeel_presence_state_t s)
+{
+    switch (s) {
+        case WIFEEL_PRESENCE_EMPTY: return "EMPTY";
+        case WIFEEL_PRESENCE_PRESENT_STILL: return "PRESENT_STILL";
+        case WIFEEL_PRESENCE_MOTION: return "MOTION";
+        default: return "?";
+    }
+}
+
 static int cmd_status(int argc, char **argv)
 {
     (void)argc;
@@ -219,6 +248,15 @@ static int cmd_status(int argc, char **argv)
 
     wifeel_csi_stream_t *s3 = csi_mgr_get_stream(WIFEEL_STREAM_DISPLAY_TO_HUB);
     printf("S3 (display->hub): %.1f pkt/s\n", (double)wifeel_csi_stream_get_pkt_rate(s3));
+
+    if (presence_is_calibrating()) {
+        printf("presence:  calibrating (%" PRIu32 " s remaining)\n",
+               presence_calibrate_remaining_ms() / 1000);
+    } else {
+        printf("presence:  %s  calibrated=%s  (S1 wander=%.2f, S3 wander=%.2f)\n",
+               presence_state_name(presence_get_state()), presence_is_calibrated() ? "yes" : "no",
+               (double)presence_get_s1_wander(), (double)presence_get_s3_wander());
+    }
     return 0;
 }
 
@@ -294,6 +332,14 @@ esp_err_t console_start(void)
         .func = &cmd_motion,
     };
     ESP_ERROR_CHECK(esp_console_cmd_register(&motion_cmd));
+
+    const esp_console_cmd_t calib_cmd = {
+        .command = "calib",
+        .help = "Start empty-room calibration for presence (P2) — room must stay empty",
+        .hint = "[seconds, default 30]",
+        .func = &cmd_calib,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&calib_cmd));
 
     return esp_console_start_repl(repl);
 }

@@ -28,12 +28,22 @@ but this stops future mixups if a second XIAO or Waveshare unit is added.
 
 ## Room layout / calibration notes
 
-_Not yet calibrated._ Fill in after milestone 7 (Presence):
+**HUB-1 and DISP-1 are on the same desk, on two sides of it** (confirmed
+by the user, 2026-09-14) — same room, short distance apart. This is
+consistent with S3's very strong, high-rate link (~100 pkt/s, RSSI
+typically -50 to -60 dBm) versus S1's weaker/farther router link (~4
+pkt/s, RSSI often -70 dBm or worse) — S3's sensing "coverage" is
+concentrated in a small area around the desk itself, not the whole room.
+Worth remembering when interpreting S1 vs S3 disagreements: a person at
+the desk should show up on both; a person elsewhere in the room mainly
+on S1 (if at all).
 
-- Router location relative to HUB-1 and DISP-1
-- Date of last empty-room calibration
+- Date of last empty-room calibration: _pending — `calib` console
+  command exists (presence.c) but hasn't been run yet as of this note;
+  see the "Next session should start here" list above._
 - Date of last people-count / position training session, and its confusion
-  matrix (see `docs/` for saved `train_models.py` output)
+  matrix (see `docs/` for saved `train_models.py` output): not started
+  (P3/P5 not built yet).
 
 ## Firmware build status
 
@@ -287,6 +297,47 @@ UI poll, since S3's own fast sample rate settles quickly) and up to
 ~2.3s for an S1-driven detection (dominated by S1's own sparse ~3-4Hz
 sample rate, which is the bottleneck in how fast its jitter EMA can
 react at all).
+
+## Empty-room baseline test (same day, ~10 min, nobody present)
+
+Both boards left completely alone for ~590s with the room genuinely
+empty (both boards on the same desk, two sides of it — see room layout
+above), to investigate the reconnection issue and get a real false-
+positive baseline. Full logs saved this session at
+`tools/../` (session scratchpad, not in the repo) — key findings:
+
+**Reliability: did NOT reproduce.** Zero AP disconnect/reconnect events
+on either board for the entire 10 minutes (the hub's
+`WIFI_EVENT_AP_STADISCONNECTED` handler, which logs every drop, never
+fired), zero crashes/resets/panics, display log completely silent the
+whole time. This strongly suggests the earlier instability is tied to
+*active* testing (rapid resets, back-to-back console commands) rather
+than a constant background problem — downgrades its urgency, though it's
+still unexplained and worth understanding eventually.
+
+**Motion: 4 false positives in 10 minutes, all S1-only.** Scores 52-62,
+each lasting 1-2.5s before clearing on its own:
+
+| Time (s since boot) | Fused | S1 score/jitter/floor | S3 score/jitter/floor |
+|---|---|---|---|
+| 145.8 | 55 | 55 / 1.63 / 0.25 | 7 / 0.28 / 0.09 |
+| 442.5 | 52 | 52 / 1.55 / 0.23 | 3 / 0.15 / 0.07 |
+| 497.7 | 62 | 62 / 1.90 / 0.33 | 5 / 0.22 / 0.08 |
+| 503.4 | 53 | 53 / 1.72 / 0.39 | 3 / 0.19 / 0.11 |
+
+S3 never came close to corroborating any of these (stayed at 3-7 every
+time, vs. its own 40-point enter threshold). Since fusion is currently
+`max(S1, S3)`, S1's noise alone is sufficient to trigger MOTION. The
+last two events (497.7s, 503.4s) are only 5.7s apart — possibly a burst
+of real network activity (DHCP renewal, a neighboring device waking up)
+rather than four independent unrelated glitches.
+
+**Implication, not yet acted on**: a fusion policy requiring some S3
+corroboration (not just S1 alone) would likely have suppressed all four
+of these — but this is a real product tradeoff (it would also suppress
+genuine S1-only motion somewhere S3 can't see, e.g. near the router but
+away from the desk), not a pure bug fix. Flagged for discussion rather
+than changed unilaterally.
 
 ### Next session should start here
 1. Root-cause the display<->hub reconnection instability (see above) —
