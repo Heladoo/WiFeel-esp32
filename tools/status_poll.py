@@ -10,7 +10,7 @@ port repeatedly was a confounder in earlier reliability investigations
 
 Usage:
     python tools/status_poll.py COM9 --minutes 5 --every 15
-    python tools/status_poll.py COM9 --minutes 3 --label "duty 10%"
+    python tools/status_poll.py COM9 --minutes 3 --cmd "phones duty 25" --label "duty 25%"
 """
 import argparse
 import re
@@ -23,6 +23,8 @@ try:
 except ImportError:
     print("pyserial not installed — run: pip install -r tools/requirements.txt", file=sys.stderr)
     sys.exit(1)
+
+from serial_util import open_port
 
 S1_RE = re.compile(r"S1 \(router->hub\): ([\d.]+) pkt/s")
 S3_RE = re.compile(r"S3 \(display->hub\): ([\d.]+) pkt/s")
@@ -44,19 +46,31 @@ def main() -> int:
     parser.add_argument("--minutes", type=float, default=5.0)
     parser.add_argument("--every", type=float, default=15.0, help="seconds between status queries")
     parser.add_argument("--label", default="", help="free-text label printed with the summary")
+    parser.add_argument("--cmd", default=None, help="console command to send once at the start, e.g. 'phones duty 25'")
+    parser.add_argument("--warmup", type=float, default=10.0,
+                        help="seconds to wait after --cmd before the first poll, so rates can settle")
     args = parser.parse_args()
+    if args.cmd and args.cmd.strip().split()[0].lower() in {"join", "passive"}:
+        print("refusing to send a command that takes credentials", file=sys.stderr)
+        return 1
 
     try:
-        ser = serial.Serial(args.port, args.baud, timeout=0.3)
+        ser = open_port(args.port, args.baud, timeout=0.3)
     except serial.SerialException as e:
         print(f"failed to open {args.port}: {e}", file=sys.stderr)
         return 1
 
+    if args.cmd:
+        ser.write((args.cmd + "\n").encode("utf-8"))
+        ser.flush()
+
     s1, s3, heap = [], [], []
     disconnected_polls = 0
     polls = 0
-    end = time.monotonic() + args.minutes * 60
-    next_poll = time.monotonic() + 2.0  # let any in-flight log lines drain first
+    ble_line = None
+    start = time.monotonic() + args.warmup
+    end = start + args.minutes * 60
+    next_poll = start
 
     try:
         while time.monotonic() < end:
@@ -77,6 +91,14 @@ def main() -> int:
                 heap.append(int(m.group(1)))
             if (m := WIFI_RE.search(text)) and m.group(1) == "not connected":
                 disconnected_polls += 1
+
+        ser.write(b"phones\n")
+        ser.flush()
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and ble_line is None:
+            text = ser.readline().decode("utf-8", errors="replace")
+            if "adverts since boot" in text:
+                ble_line = text.strip()
     finally:
         ser.close()
 
@@ -85,6 +107,8 @@ def main() -> int:
     print(summarize("S3 pkt/s", s3, ""))
     print(summarize("free heap", [h / 1024 for h in heap], " KB"))
     print(f"polls where hub STA was disconnected: {disconnected_polls}/{polls}")
+    if ble_line:
+        print(ble_line)
     return 0
 
 

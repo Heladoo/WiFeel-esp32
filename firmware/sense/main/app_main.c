@@ -15,6 +15,8 @@
 #include "presence.h"
 #include "link.h"
 #include "console_cmds.h"
+#include "devices.h"
+#include "ble_scan.h"
 
 static const char *TAG = "app_main";
 
@@ -136,6 +138,12 @@ void app_main(void)
     ESP_ERROR_CHECK(motion_init());
     ESP_ERROR_CHECK(presence_init());
     ESP_ERROR_CHECK(link_init());
+    ESP_ERROR_CHECK(devices_init());
+    /* Non-fatal: the hub's core sensing works without BLE. */
+    err = ble_scan_init();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "ble_scan_init failed: %s (phone detection over BLE disabled)", esp_err_to_name(err));
+    }
 
     BaseType_t watchdog_ok = xTaskCreate(&s1_ping_watchdog_task, "s1_ping_watchdog", 2560,
                                           NULL, tskIDLE_PRIORITY + 1, NULL);

@@ -22,6 +22,8 @@ except ImportError:
     print("pyserial not installed — run: pip install -r tools/requirements.txt", file=sys.stderr)
     sys.exit(1)
 
+from serial_util import open_port
+
 # Commands known to take a password/credential as an argument — refused
 # outright, so this tool can't be misused to funnel a secret through an
 # automated call even by accident.
@@ -43,7 +45,7 @@ def main() -> int:
         return 1
 
     try:
-        ser = serial.Serial(args.port, args.baud, timeout=0.5)
+        ser = open_port(args.port, args.baud, timeout=0.5)
     except serial.SerialException as e:
         print(f"failed to open {args.port}: {e}", file=sys.stderr)
         return 1

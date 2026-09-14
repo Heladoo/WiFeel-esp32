@@ -27,12 +27,12 @@ otherwise ask the user rather than re-deriving the architecture from scratch.
 - P2 (presence) code is written (`presence.c`/`.h`) and verified correct
   in a clean test, but its wander thresholds are still unvalidated
   placeholders.
-- The DTR/RTS reboot theory was tested directly and **refuted** — a
-  clean single connection held for 4 minutes had zero reboots. The
-  earlier instability's real causes turned out to be: (1) this agent's
-  own `run_in_background` Bash calls launching duplicate Python
-  processes that fought over the COM port, and (2) a real firmware bug,
-  now fixed — see next point.
+- **Opening/closing the serial port resets HUB-1** unless DTR and RTS
+  are held low before open. All tools now open ports through
+  `tools/serial_util.py` `open_port()`, which does that — use it in any
+  new tool. (An earlier "DTR/RTS refuted" conclusion was wrong; see
+  docs/boards.md.) Also: `run_in_background` Bash calls on this machine
+  launch duplicate Python processes — never use it for serial.
 - **Fixed**: both boards' `ping_gw.c` could get stuck retrying a dead
   ping forever without `WIFI_EVENT_STA_DISCONNECTED` ever firing. Both
   now run a watchdog task that force-reconnects after a 5s stall. One

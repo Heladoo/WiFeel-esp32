@@ -21,6 +21,9 @@
 #include "presence.h"
 #include "board.h"
 #include "wifeel_csi.h"
+#include "ble_scan.h"
+#include "devices.h"
+#include "esp_timer.h"
 
 static const char *TAG = "console";
 
@@ -190,6 +193,73 @@ static int cmd_calib(int argc, char **argv)
     return 0;
 }
 
+/* `phones raw <seconds> [min_rssi]`: print adverts for fingerprinting real
+ * phones. Hashed ids only — never the raw address. */
+static int phones_raw(int seconds, int min_rssi)
+{
+    if (ble_scan_get_duty() == 0) {
+        printf("BLE scanning is paused (phones duty 0) — nothing to capture\n");
+        return 1;
+    }
+    esp_err_t err = ble_scan_raw_start();
+    if (err != ESP_OK) {
+        printf("raw capture failed to start: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+    printf("capturing adverts for %d s (rssi >= %d)...\n", seconds, min_rssi);
+    int64_t end = esp_timer_get_time() + (int64_t)seconds * 1000000;
+    unsigned shown = 0, dropped_weak = 0;
+    ble_scan_raw_adv_t adv;
+    while (esp_timer_get_time() < end) {
+        if (!ble_scan_raw_next(&adv, 200)) {
+            continue;
+        }
+        if (adv.rssi < min_rssi) {
+            dropped_weak++;
+            continue;
+        }
+        wifeel_vendor_t vendor;
+        uint8_t apple_type;
+        bool phone = ble_scan_classify(adv.data, adv.len, &vendor, &apple_type);
+        printf("id=%04x rssi=%4d evt=%u vendor=%-9s phone=%-3s apple=%02x data=",
+               devices_id_hash(adv.addr), adv.rssi, adv.event_type,
+               wifeel_vendor_name(vendor), phone ? "yes" : "no", apple_type);
+        for (uint8_t i = 0; i < adv.len; i++) {
+            printf("%02x", adv.data[i]);
+        }
+        printf("\n");
+        shown++;
+    }
+    ble_scan_raw_stop();
+    printf("done: %u shown, %u below rssi filter\n", shown, dropped_weak);
+    return 0;
+}
+
+static int cmd_phones(int argc, char **argv)
+{
+    if (argc >= 2 && strcmp(argv[1], "raw") == 0) {
+        int seconds = (argc >= 3) ? atoi(argv[2]) : 10;
+        int min_rssi = (argc >= 4) ? atoi(argv[3]) : -127;
+        return phones_raw(seconds > 0 ? seconds : 10, min_rssi);
+    }
+    if (argc >= 2 && strcmp(argv[1], "duty") == 0) {
+        if (argc < 3) {
+            printf("BLE scan duty: %u%%\n", ble_scan_get_duty());
+            return 0;
+        }
+        int pct = atoi(argv[2]);
+        if (pct < 0 || pct > 100 || ble_scan_set_duty((uint8_t)pct) != ESP_OK) {
+            printf("usage: phones duty <0-100>\n");
+            return 1;
+        }
+        printf("BLE scan duty set to %d%%%s\n", pct, pct == 0 ? " (paused)" : "");
+        return 0;
+    }
+    printf("BLE scan duty: %u%%  adverts since boot: %" PRIu32 "\n",
+           ble_scan_get_duty(), ble_scan_adv_count());
+    return 0;
+}
+
 static const char *presence_state_name(wifeel_presence_state_t s)
 {
     switch (s) {
@@ -345,6 +415,14 @@ esp_err_t console_start(void)
         .func = &cmd_calib,
     };
     ESP_ERROR_CHECK(esp_console_cmd_register(&calib_cmd));
+
+    const esp_console_cmd_t phones_cmd = {
+        .command = "phones",
+        .help = "Nearby phones: summary | raw <s> [min_rssi] | duty <0-100>",
+        .hint = "[raw <s> [min_rssi] | duty <pct>]",
+        .func = &cmd_phones,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&phones_cmd));
 
     return esp_console_start_repl(repl);
 }

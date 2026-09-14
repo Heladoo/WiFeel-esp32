@@ -112,6 +112,24 @@ typedef enum {
     WIFEEL_CALIB_CANCEL = 1,
 } wifeel_calib_action_t;
 
+/** Vendor of a nearby device, from BLE advert manufacturer data. Vendor
+ *  level only — model can't be told apart reliably. Also indexes
+ *  wifeel_msg_devices_t.vendor_counts[]. */
+typedef enum {
+    WIFEEL_VENDOR_UNKNOWN   = 0, /* no manufacturer data (e.g. Wi-Fi-only sightings) */
+    WIFEEL_VENDOR_APPLE     = 1,
+    WIFEEL_VENDOR_SAMSUNG   = 2,
+    WIFEEL_VENDOR_GOOGLE    = 3,
+    WIFEEL_VENDOR_MICROSOFT = 4,
+    WIFEEL_VENDOR_OTHER     = 5,
+    WIFEEL_VENDOR_COUNT     = 6,
+} wifeel_vendor_t;
+
+typedef enum {
+    WIFEEL_DEV_SRC_BLE  = 0,
+    WIFEEL_DEV_SRC_WIFI = 1,
+} wifeel_dev_source_t;
+
 #pragma pack(push, 1)
 
 typedef struct {
@@ -247,6 +265,9 @@ size_t wifeel_proto_pack(uint8_t *out, wifeel_msg_type_t type, uint16_t seq,
 bool wifeel_proto_unpack(const uint8_t *buf, size_t len,
                           wifeel_msg_type_t *type, uint16_t *seq,
                           const void **payload_out, size_t *payload_len_out);
+
+/** Short display name for a wifeel_vendor_t value ("Apple", ...). */
+const char *wifeel_vendor_name(uint8_t vendor);
 
 #ifdef __cplusplus
 }

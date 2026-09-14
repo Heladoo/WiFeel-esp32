@@ -31,3 +31,17 @@ CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=n
 # --- FreeRTOS tick rate: finer-grained timing for the ~10ms JOIN-mode
 # ping interval (ping_gw.c) and the 20Hz CSI resampling grid (wifeel_csi). ---
 CONFIG_FREERTOS_HZ=1000
+
+# --- Bluetooth LE for nearby-phone detection (ble_scan.c): NimBLE host,
+# passive observer only — never advertises, never connects, so no
+# connection roles or security manager are compiled in. Wi-Fi and BLE
+# share the C6's one 2.4 GHz radio via software coexistence. ---
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n
+CONFIG_BT_NIMBLE_SECURITY_ENABLE=n
+CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
+CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y

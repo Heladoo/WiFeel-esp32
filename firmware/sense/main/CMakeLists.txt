@@ -10,6 +10,8 @@ idf_component_register(
         "presence.c"
         "link.c"
         "console_cmds.c"
+        "devices.c"
+        "ble_scan.c"
     INCLUDE_DIRS "."
     REQUIRES
         "esp_wifi"
@@ -20,6 +22,7 @@ idf_component_register(
         "lwip"
         "esp_driver_gpio"
         "esp_timer"
+        "bt"
         "wifeel_proto"
         "wifeel_csi"
 )

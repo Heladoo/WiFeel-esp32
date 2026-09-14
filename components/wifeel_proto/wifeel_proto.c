@@ -86,3 +86,15 @@ bool wifeel_proto_unpack(const uint8_t *buf, size_t len,
     }
     return true;
 }
+
+const char *wifeel_vendor_name(uint8_t vendor)
+{
+    switch (vendor) {
+        case WIFEEL_VENDOR_APPLE:     return "Apple";
+        case WIFEEL_VENDOR_SAMSUNG:   return "Samsung";
+        case WIFEEL_VENDOR_GOOGLE:    return "Google";
+        case WIFEEL_VENDOR_MICROSOFT: return "Microsoft";
+        case WIFEEL_VENDOR_OTHER:     return "Other";
+        default:                      return "Unknown";
+    }
+}

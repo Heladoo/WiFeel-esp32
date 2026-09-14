@@ -509,6 +509,47 @@ raced ("sta is connecting, return error").
 no BLE, 10ms ping): S1 median 2.5 pkt/s (1.0-5.0), S3 median 100.0
 (98.1-101.0), free heap 268 KB, hub STA disconnected on 0/20 polls.
 
+## Correction: opening the serial port DOES reset HUB-1 — fixed in tools (same day)
+
+The "DTR/RTS theory refuted" conclusion above was too strong. The 4-minute
+single-connection test only proved the hub doesn't reboot *while* a
+connection stays open; it never tested open/close. During BLE duty-cycle
+measurements, runs kept starting with a fresh boot (advert counter back
+near zero, duty back to its default, an extra boot-banner "free heap"
+line), and one 5-second `send_cmd.py` capture caught **two** boots in a
+row. pySerial's default open raises DTR and RTS one after the other (and
+close drops them); the C6's USB-Serial/JTAG maps those lines to reset/boot
+like esptool's auto-reset, so the transitions can reset the chip.
+
+**Fix**: `tools/serial_util.py` `open_port()` sets DTR and RTS low
+*before* `open()` so they never change (ESP-IDF's monitor does the same).
+All tools use it now. Verified: 8 back-to-back `send_cmd.py` connections,
+advert counter rose 87 → 139 with no boot banner. This very likely
+explains many of the unexplained hub reboots seen earlier in the project.
+
+## BLE scan duty vs CSI packet rate (phone detection, step 2)
+
+NimBLE passive observer added to the hub (`ble_scan.c`). Measured with
+`tools/status_poll.py`, 3 min per setting, one connection, after the
+serial fix above:
+
+| BLE duty | S3 pkt/s median (min) | S1 pkt/s median | Adverts/s |
+|---|---|---|---|
+| 0% | 100.0 (98.7) | 3.0 | — |
+| 10% | 100.0 (95.4) | 2.0 | ~1.4 |
+| 25% | 99.0 (95.0) | 3.8 | ~3.5 |
+| 50% | 96.7 (91.9) | 2.0 | ~7 |
+
+S1 is too noisy (0.5-12 pkt/s) to show a trend. Default set to **25%**:
+effectively free for CSI. First visible S3 cost appears at 50%. Boot free
+heap dropped from ~276 KB to ~225 KB with NimBLE; runtime ~211 KB. App
+binary 920 KB → 1.2 MB (62% of partition free). Wi-Fi accepted
+`WIFI_PS_NONE` with BT coexistence enabled.
+
+Ambient capture (15s, nobody's phone nearby): a Microsoft PC, a Samsung
+device, an advert named "BYD BLE3" (likely a car), all at -85 to -100 dBm.
+No Apple adverts.
+
 ## Backlog (deferred while phone detection is built)
 
 Phone detection (BLE + Wi-Fi sniffing, hub only) was prioritized ahead

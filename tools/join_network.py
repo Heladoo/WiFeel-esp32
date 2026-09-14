@@ -25,6 +25,8 @@ except ImportError:
     print("pyserial not installed — run: pip install -r tools/requirements.txt", file=sys.stderr)
     sys.exit(1)
 
+from serial_util import open_port
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -39,7 +41,7 @@ def main() -> int:
     password = getpass.getpass("Wi-Fi password (leave blank for an open network): ")
 
     try:
-        ser = serial.Serial(args.port, args.baud, timeout=0.5)
+        ser = open_port(args.port, args.baud, timeout=0.5)
     except serial.SerialException as e:
         print(f"failed to open {args.port}: {e}", file=sys.stderr)
         return 1
