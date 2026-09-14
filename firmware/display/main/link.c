@@ -1,5 +1,6 @@
 #include "link.h"
 
+#include <inttypes.h>
 #include <string.h>
 #include "esp_wifi.h"
 #include "esp_now.h"
@@ -8,6 +9,7 @@
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "ping_gw.h"
 
@@ -17,6 +19,18 @@ static const char *TAG = "link";
  * capture on this link (S3) needs traffic to tap, same reasoning as
  * JOIN mode. */
 #define LINK_PING_INTERVAL_MS 10
+
+/* Backstop for a bug observed live: the hub's SoftAP link can go dead
+ * (e.g. the hub's STA side reconnects/roams, forcing the AP to follow
+ * its channel) without WIFI_EVENT_STA_DISCONNECTED ever firing here —
+ * association state says "still connected" while ping_gw's sends fail
+ * forever. Rather than trust the disconnect event alone, poll how long
+ * it's been since the last successful ping reply and force a reconnect
+ * if that stretches out too long. At 100Hz, a healthy link sees a
+ * success at least every ~10ms, so a multi-second stall is an
+ * unambiguous signal, not noise. */
+#define LINK_WATCHDOG_CHECK_INTERVAL_MS 2000
+#define LINK_WATCHDOG_STALL_MS 5000
 
 static portMUX_TYPE s_state_mux = portMUX_INITIALIZER_UNLOCKED;
 static wifeel_msg_state_t s_latest_state;
@@ -89,6 +103,33 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
     }
 }
 
+static void watchdog_task(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(LINK_WATCHDOG_CHECK_INTERVAL_MS));
+
+        if (!ping_gw_is_running()) {
+            continue; /* not connected yet, or a real disconnect already handled it */
+        }
+        uint32_t stalled_ms = ping_gw_ms_since_last_success();
+        if (stalled_ms < LINK_WATCHDOG_STALL_MS) {
+            continue;
+        }
+
+        ESP_LOGW(TAG, "no successful ping in %" PRIu32 " ms — link looks dead but no "
+                 "disconnect event fired; forcing a reconnect", stalled_ms);
+        ping_gw_stop();
+        /* esp_wifi_disconnect() should itself trigger WIFI_EVENT_STA_DISCONNECTED,
+         * whose handler already does ping_gw_stop()+esp_wifi_connect() — but if
+         * the driver's internal state disagrees with what we're observing here
+         * (the whole reason this watchdog exists) that event might not come, so
+         * call esp_wifi_connect() directly too rather than wait on it. */
+        esp_wifi_disconnect();
+        esp_wifi_connect();
+    }
+}
+
 esp_err_t link_init(void)
 {
     esp_err_t err = esp_netif_init();
@@ -123,6 +164,11 @@ esp_err_t link_init(void)
 
     ESP_ERROR_CHECK(esp_now_init());
     ESP_ERROR_CHECK(esp_now_register_recv_cb(&on_recv));
+
+    BaseType_t ok = xTaskCreate(&watchdog_task, "link_watchdog", 2560, NULL, tskIDLE_PRIORITY + 1, NULL);
+    if (ok != pdPASS) {
+        ESP_LOGW(TAG, "failed to start link watchdog task");
+    }
 
     ESP_LOGI(TAG, "joining hub SoftAP \"%s\"", WIFEEL_LINK_AP_SSID);
     return ESP_OK;

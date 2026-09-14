@@ -174,6 +174,14 @@ void wifi_mgr_disconnect(void)
     s_connected = false;
 }
 
+void wifi_mgr_force_reconnect(void)
+{
+    ESP_LOGW(TAG, "forcing a reconnect");
+    esp_wifi_disconnect();
+    s_connected = false;
+    esp_wifi_connect();
+}
+
 bool wifi_mgr_is_connected(void)
 {
     return s_connected;

@@ -21,6 +21,17 @@ static const char *TAG = "app_main";
 /* ~100 Hz per the plan's JOIN mode design. */
 #define JOIN_PING_INTERVAL_MS 10
 
+/* Backstop for a bug observed live: S1's gateway ping can get stuck
+ * retrying (and failing) forever without WIFI_EVENT_STA_DISCONNECTED
+ * ever firing — seen to cascade into the hub being too busy/starved to
+ * complete the SoftAP's WPA2 handshake with the display, breaking S3
+ * too even though the hub itself never crashed. Poll how long it's been
+ * since the last successful ping and force a reconnect if that
+ * stretches out too long, rather than trusting the disconnect event
+ * alone (same fix as firmware/display/main/link.c's watchdog). */
+#define S1_WATCHDOG_CHECK_INTERVAL_MS 2000
+#define S1_WATCHDOG_STALL_MS 5000
+
 /*
  * Fires on EVERY successful Wi-Fi connection (see wifi_mgr_set_connected_cb)
  * — an explicit `join` console command, but also ESP-IDF's automatic
@@ -74,6 +85,26 @@ static void on_ap_peer_disconnected(const uint8_t mac[6])
     ESP_LOGI(TAG, "S3 stopped (display disconnected)");
 }
 
+static void s1_ping_watchdog_task(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(S1_WATCHDOG_CHECK_INTERVAL_MS));
+
+        if (!ping_gw_is_running()) {
+            continue; /* not connected yet, or a real disconnect already handled it */
+        }
+        uint32_t stalled_ms = ping_gw_ms_since_last_success();
+        if (stalled_ms < S1_WATCHDOG_STALL_MS) {
+            continue;
+        }
+
+        ESP_LOGW(TAG, "S1: no successful ping in %" PRIu32 " ms — forcing reconnect", stalled_ms);
+        ping_gw_stop();
+        wifi_mgr_force_reconnect();
+    }
+}
+
 void app_main(void)
 {
     esp_err_t err = nvs_flash_init();
@@ -95,6 +126,12 @@ void app_main(void)
     ESP_ERROR_CHECK(motion_init());
     ESP_ERROR_CHECK(presence_init());
     ESP_ERROR_CHECK(link_init());
+
+    BaseType_t watchdog_ok = xTaskCreate(&s1_ping_watchdog_task, "s1_ping_watchdog", 2560,
+                                          NULL, tskIDLE_PRIORITY + 1, NULL);
+    if (watchdog_ok != pdPASS) {
+        ESP_LOGW(TAG, "failed to start S1 ping watchdog task");
+    }
 
     ESP_LOGI(TAG, "==================================================");
     ESP_LOGI(TAG, " WiFeel sense (hub)  fw=%s  target=%s", WIFEEL_SENSE_FW_VERSION, CONFIG_IDF_TARGET);

@@ -61,6 +61,19 @@ esp_err_t wifi_mgr_join(const char *ssid, const char *password, uint32_t timeout
 void wifi_mgr_disconnect(void);
 
 /**
+ * Forces a disconnect+reconnect of the STA link (the user's router, not
+ * the hub's own SoftAP) even if the driver currently believes it's still
+ * connected. For a watchdog that's detected a stalled link some other
+ * way (e.g. ping_gw's success timestamps in app_main.c) rather than
+ * trusting WIFI_EVENT_STA_DISCONNECTED to fire on its own — observed
+ * live on this hardware to sometimes not fire even when the actual data
+ * path is dead. Calls esp_wifi_connect() directly as well as
+ * disconnecting, rather than only relying on the disconnect event's own
+ * handler to do it, for the same reason.
+ */
+void wifi_mgr_force_reconnect(void);
+
+/**
  * Controls whether the driver's WIFI_EVENT_STA_DISCONNECTED handler
  * automatically retries the connection (the default, true — needed for
  * ordinary JOIN-mode robustness). Set false before a diagnostic that needs
