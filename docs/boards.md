@@ -470,6 +470,37 @@ still there and may need a network-side change (e.g. joining the main
 network instead of the guest one, if that's an option) rather than more
 firmware work.
 
+## Ping-rate test: the ~8s reconnect cycle is NOT load-related (same day)
+
+Hypothesis (user's): the guest network is kicking the hub as
+"self-defense" against the sustained 100Hz gateway ping. Tested by
+dropping `JOIN_PING_INTERVAL_MS` from 10ms to 50ms (5x less traffic).
+Result: the watchdog-forced reconnects kept landing ~8.0s apart
+(32378 / 40388 / 48399 / 56411 / 64422 ms) — identical to before. A
+load/rate trigger would have shifted that timing; it didn't move at all.
+Reverted to 10ms. The connection is WPA3-SAE H2E on a mesh (BSSID
+changes each reconnect), so a periodic mesh-side re-key/steering timer
+is now the leading guess. Next test: join the main network instead of
+"Amira_Guest".
+
+## Backlog (deferred while phone detection is built)
+
+Phone detection (BLE + Wi-Fi sniffing, hub only) was prioritized ahead
+of these by the user on 2026-09-14:
+
+- **Console typing**: the hub's constant logging makes the interactive
+  console unusable, so `join` can't be typed by hand. Needs a `quiet`
+  command or a lower default log level. Workaround written:
+  `tools/join_network.py` (prompts locally, masks the password) —
+  untested.
+- **Router reconnects every ~8s** on "Amira_Guest" (see section above).
+  Not ping-rate related. Test on the main network.
+- **Never use `run_in_background` for serial captures** on this machine
+  — it launches duplicate Python processes that fight over the port.
+- **Still to validate**: S1 and S3 motion walk-bys (boards sit close on
+  one desk, so both should react together), then presence, then the
+  fusion policy. `MOTION_SCORE_DELTA_RANGE_S3` is still a placeholder.
+
 ### Next session should start here
 1. **Ask about the "Amira_Guest" network**: is the hub meant to be on a
    guest network long-term, or would the main/home network avoid the

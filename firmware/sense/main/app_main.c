@@ -18,7 +18,10 @@
 
 static const char *TAG = "app_main";
 
-/* ~100 Hz per the plan's JOIN mode design. */
+/* ~100 Hz per the plan's JOIN mode design. A 50ms (~20Hz) rate was tried
+ * to test whether the router's ~8s reconnect cycle was a reaction to ping
+ * load; the cycle's timing didn't change at all, so this was reverted
+ * (see docs/boards.md). */
 #define JOIN_PING_INTERVAL_MS 10
 
 /* Backstop for a bug observed live: S1's gateway ping can get stuck
