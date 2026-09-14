@@ -24,12 +24,20 @@ otherwise ask the user rather than re-deriving the architecture from scratch.
 - Display renders a live home screen (LVGL) fed by the hub's ESP-NOW
   STATE broadcasts: a motion indicator, fused score, and a 2-series trend
   chart of S1 vs S3 scores.
-- **Open problem, start here next session**: the display↔hub link drops
-  and silently reconnects unpredictably, not just after a hub reboot —
-  also mid-session with nothing reset. This corrupts any attempt to
-  calibrate S3's own scoring range. See docs/boards.md's "Per-stream
-  calibration + trend chart + a real reliability problem" section for
-  what's been ruled out and what to check next.
+- P2 (presence) code is written (`presence.c`/`.h`) and verified correct
+  in a clean test, but its wander thresholds are still unvalidated
+  placeholders.
+- **Open problem, start here next session**: the hub reboots far more
+  often during interactive testing (rapid `send_cmd.py`/`serial_log.py`
+  calls) than during fully hands-off operation. Leading theory: the
+  XIAO C6's native-USB console shares the same DTR/RTS auto-reset
+  convenience feature `idf.py flash`/`monitor` rely on, so **any** tool
+  opening/closing a handle to its COM port can trigger a reset —
+  meaning most of what looked like a display↔hub link reliability bug
+  may actually be a side effect of how often diagnostic tools reconnect
+  to the hub's serial port, not a genuine RF/firmware defect. See
+  docs/boards.md's "Likely root cause of the reconnection instability:
+  our own tooling" section for the evidence and what to verify next.
 
 ## Hub↔display link (the "second sensing node")
 

@@ -339,15 +339,98 @@ genuine S1-only motion somewhere S3 can't see, e.g. near the router but
 away from the desk), not a pure bug fix. Flagged for discussion rather
 than changed unilaterally.
 
+## Likely root cause of the reconnection instability: our own tooling (same day, later still)
+
+Flashed presence.c (P2) to the hub and tried a live empty-room
+calibration test. The hub kept rebooting — uptime visibly reset to a
+small number between console queries several times over ~15 minutes,
+even though the room was empty and nothing was touched physically. This
+looked at first like a new, worse problem than the earlier baseline's
+"zero crashes" result. Investigation:
+
+- Confirmed via repeated `status` queries that device uptime kept
+  dropping back to single/double-digit seconds between calls — genuine
+  reboots, not just link drops (free heap and boot banners consistent
+  with a fresh boot each time).
+- Caught direct evidence of the mechanism: at one point, **two
+  identical `python tools/serial_log.py COM9 ...` processes** were
+  found running simultaneously (`Get-CimInstance Win32_Process` showed
+  both, same args, different Python interpreters on PATH) — both
+  competing for the same COM port. Killing them triggered another
+  reboot. A subsequent fresh, single connection *also* triggered a
+  reboot moments later.
+- Also noticed (via the terminal panel) what looked like a separate
+  serial/monitor session that had been connected to COM9 around the
+  same time.
+
+**Working theory**: the XIAO ESP32-C6 has no separate USB-UART bridge
+chip — Wi-Fi console access goes over the native USB-Serial-JTAG
+peripheral, which (like ESP32-S3/C3) implements the same DTR/RTS
+auto-reset convenience feature `idf.py flash`/`monitor` rely on, so
+normal users don't need a manual BOOT+RESET. That means **any** tool
+that opens (or abruptly closes) a handle to COM9 — not just esptool —
+can trigger a reset if its DTR/RTS transitions land in a pattern the
+peripheral treats as a reset request. This fits every observation this
+session:
+  - The one **fully hands-off 10-minute baseline** (`baseline_capture.py`
+    opens both ports exactly once and holds them for the whole run) saw
+    **zero** reboots.
+  - Nearly every round of interactive testing — `send_cmd.py`/
+    `serial_log.py` calls opening a fresh connection per command — saw
+    reboots, sometimes within seconds of each other.
+  - The elevated S1 false-positive rate seen right after starting
+    calibration (up to 4 events per 30s, scores up to 100, vs. the
+    baseline's 4-events-per-10-minutes) is consistent with this too:
+    each reboot wipes `motion.c`'s adaptive floor and `fast_jitter_ema`,
+    so the first several seconds of CSI after every reboot look like a
+    fake motion spike until the floor recatches up. This is very
+    likely **not** a real regression in the algorithm — it's a symptom
+    of frequent reboots, which is itself a symptom of frequent
+    reconnects.
+  - It also explains why S3 sometimes failed to recover for minutes at
+    a time: when the hub reboots, its SoftAP disappears, but the
+    display's `WIFI_EVENT_STA_DISCONNECTED` doesn't always fire
+    promptly (link-layer association can outlive the actual dead data
+    path), so `ping_gw`'s continuous ICMP session just fails silently
+    forever (`ping_sock: send error=0`, hundreds/sec) until something
+    (e.g. a manual reset) breaks the deadlock. `firmware/display/main/
+    link.c` already calls `ping_gw_stop()` correctly on disconnect —
+    the bug is that disconnect isn't always detected, not a missing
+    stop call.
+  - Presence calibration (`presence.c`) itself is **not buggy** — a
+    clean, single-connection 30s test completed correctly
+    (`calibration finished` logged right on schedule, `calibrated=yes`
+    afterward). The earlier "never completes" observation was a
+    casualty of a mid-calibration reboot wiping `presence.c`'s
+    in-RAM `s_calibrating`/`s_have_baseline` statics, not a logic bug.
+
+**Not fully proven** — pySerial's exact DTR/RTS behavior on open/close
+wasn't directly instrumented, and the correlation, while strong, wasn't
+100%. But this is now the leading explanation for the reconnection
+instability investigated (and left unresolved) earlier this session,
+and it reframes the problem from "mystery RF/firmware reliability bug"
+to "diagnostic tooling opens too many short-lived serial connections."
+
 ### Next session should start here
-1. Root-cause the display<->hub reconnection instability (see above) —
-   this blocks trustworthy S3 calibration and probably affects P2-P5
-   too, since they'll all depend on this same link.
-2. Once stable, redo the S3-focused walk-by test cleanly and set a real
-   `MOTION_SCORE_DELTA_RANGE_S3`.
-3. Consider whether the false-motion / long-idle-period behavior needs
-   validation before treating P1 as "done" (only walk-by tests exist so
-   far, no extended quiet-room test).
+1. **Test the tooling theory directly**: instrument `tools/serial_log.py`/
+   `send_cmd.py` to log DTR/RTS state around open/close, or try opening
+   the port with `dsrdtr=False` explicitly set before any line changes,
+   and see if that prevents the reboot. If confirmed, the real fix is
+   behavioral (prefer long-lived connections, avoid rapid reconnects)
+   plus maybe a `--no-reset`-safe open mode in the tools.
+2. Once reboots are under control, redo the S3-focused walk-by test
+   cleanly and set a real `MOTION_SCORE_DELTA_RANGE_S3` (still an
+   unvalidated placeholder equal to S1's value).
+3. Redo empty-room presence calibration (the code works; just needs a
+   run that isn't interrupted by a reboot) and validate
+   `PRESENCE_WANDER_THRESHOLD_S1`/`_S3` (still placeholders) against a
+   real "person sitting still nearby" test.
+4. Decide on the S1-alone-triggers-MOTION fusion policy question raised
+   by the original baseline (4 false positives, all S1, S3 never
+   corroborating) — now better understood as likely CSI-history-reset
+   noise rather than an inherent S1 sensitivity problem, but still
+   worth a real decision once reboots are rare enough to tell the two
+   apart cleanly.
 
 ## Known per-unit quirks
 
