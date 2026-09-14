@@ -8,6 +8,7 @@
 static const char *TAG = "ping_gw";
 static esp_ping_handle_t s_session;
 static bool s_running;
+static bool s_has_succeeded;
 static int64_t s_last_success_us;
 
 static void on_ping_success(esp_ping_handle_t hdl, void *args)
@@ -15,6 +16,7 @@ static void on_ping_success(esp_ping_handle_t hdl, void *args)
     (void)hdl;
     (void)args;
     s_last_success_us = esp_timer_get_time();
+    s_has_succeeded = true;
 }
 
 esp_err_t ping_gw_start(const esp_ip4_addr_t *target, uint32_t interval_ms)
@@ -61,6 +63,7 @@ esp_err_t ping_gw_start(const esp_ip4_addr_t *target, uint32_t interval_ms)
     /* Seed with "now" rather than 0 so the watchdog doesn't see a huge
      * apparent stall in the brief window before the first real reply. */
     s_last_success_us = esp_timer_get_time();
+    s_has_succeeded = false;
     s_running = true;
 
     ESP_LOGI(TAG, "pinging " IPSTR " every %" PRIu32 " ms", IP2STR(target), interval_ms);
@@ -80,6 +83,11 @@ void ping_gw_stop(void)
 bool ping_gw_is_running(void)
 {
     return s_running;
+}
+
+bool ping_gw_has_succeeded(void)
+{
+    return s_running && s_has_succeeded;
 }
 
 uint32_t ping_gw_ms_since_last_success(void)

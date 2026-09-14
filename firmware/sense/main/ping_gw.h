@@ -28,6 +28,12 @@ void ping_gw_stop(void);
  *  right now" apart from "supposed to be pinging but isn't succeeding". */
 bool ping_gw_is_running(void);
 
+/** True once at least one reply has arrived since the last ping_gw_start().
+ *  Some networks (e.g. guest SSIDs that isolate clients from the gateway)
+ *  never answer ICMP at all — a stall watchdog must not treat that as a
+ *  dead link, or it reconnects forever. */
+bool ping_gw_has_succeeded(void);
+
 /**
  * Milliseconds since the last successful reply, or since ping_gw_start()
  * if none has arrived yet. Returns 0 if not currently running.

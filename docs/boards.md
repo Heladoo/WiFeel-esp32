@@ -483,6 +483,32 @@ changes each reconnect), so a periodic mesh-side re-key/steering timer
 is now the leading guess. Next test: join the main network instead of
 "Amira_Guest".
 
+## Correction: the ~8s reconnect cycle was our own watchdog (same day)
+
+The two sections above blamed "Amira_Guest" for the ~8s reconnects. That
+was wrong. With the ping sends checked directly (zero `ping_sock: send
+error`), the watchdog fired ~6.8s after *every* fresh connection with "no
+successful ping" — the gateway on this guest network **never answers
+ICMP at all**. The S1 watchdog therefore declared every connection dead
+(5s stall + up to 2s check interval) and reconnected, forever. That's why
+the ping-rate change couldn't move the timing, and why the hub had stayed
+connected for 2+ hours before the watchdog existed. The BSSID changes
+were just each forced reconnect landing on a different mesh node.
+
+It also explains S1's rate all along: ~2-5 pkt/s from the AP's own
+frames, never the ~100 pkt/s the plan expected from ping replies.
+
+**Fixed**: the hub watchdog only arms after the gateway has answered at
+least once on the current connection (`ping_gw_has_succeeded()`), and
+`status` now prints whether the gateway answers. The extra
+`esp_wifi_connect()` after a forced disconnect was removed on both boards
+— the STA_DISCONNECTED handler already reconnects, and the double call
+raced ("sta is connecting, return error").
+
+**Baseline after the fix** (5 min, one connection, `tools/status_poll.py`,
+no BLE, 10ms ping): S1 median 2.5 pkt/s (1.0-5.0), S3 median 100.0
+(98.1-101.0), free heap 268 KB, hub STA disconnected on 0/20 polls.
+
 ## Backlog (deferred while phone detection is built)
 
 Phone detection (BLE + Wi-Fi sniffing, hub only) was prioritized ahead
@@ -493,8 +519,11 @@ of these by the user on 2026-09-14:
   command or a lower default log level. Workaround written:
   `tools/join_network.py` (prompts locally, masks the password) —
   untested.
-- **Router reconnects every ~8s** on "Amira_Guest" (see section above).
-  Not ping-rate related. Test on the main network.
+- **S1 gets no ping replies on "Amira_Guest"** (gateway doesn't answer
+  ICMP), so S1 CSI is only ~2-5 pkt/s from the AP's own frames. Options:
+  join the main network, or generate S1 traffic another way (e.g. UDP/DNS
+  to the gateway). With no replies, the S1 watchdog can't detect a stuck
+  link on this network; an AP-frame-arrival liveness check would cover it.
 - **Never use `run_in_background` for serial captures** on this machine
   — it launches duplicate Python processes that fight over the port.
 - **Still to validate**: S1 and S3 motion walk-bys (boards sit close on

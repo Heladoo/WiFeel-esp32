@@ -67,9 +67,8 @@ void wifi_mgr_disconnect(void);
  * way (e.g. ping_gw's success timestamps in app_main.c) rather than
  * trusting WIFI_EVENT_STA_DISCONNECTED to fire on its own — observed
  * live on this hardware to sometimes not fire even when the actual data
- * path is dead. Calls esp_wifi_connect() directly as well as
- * disconnecting, rather than only relying on the disconnect event's own
- * handler to do it, for the same reason.
+ * path is dead. esp_wifi_disconnect() itself raises STA_DISCONNECTED
+ * (confirmed in live logs), whose handler reconnects.
  */
 void wifi_mgr_force_reconnect(void);
 

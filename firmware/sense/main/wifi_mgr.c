@@ -177,9 +177,11 @@ void wifi_mgr_disconnect(void)
 void wifi_mgr_force_reconnect(void)
 {
     ESP_LOGW(TAG, "forcing a reconnect");
-    esp_wifi_disconnect();
     s_connected = false;
-    esp_wifi_connect();
+    /* The STA_DISCONNECTED handler reconnects (auto-reconnect is on). An
+     * extra esp_wifi_connect() here raced with it ("sta is connecting,
+     * return error" in the log). */
+    esp_wifi_disconnect();
 }
 
 bool wifi_mgr_is_connected(void)

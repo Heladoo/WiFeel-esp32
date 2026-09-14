@@ -39,14 +39,14 @@ otherwise ask the user rather than re-deriving the architecture from scratch.
   occurrence traced precisely: the hub's own S1 ping got stuck, starving
   it enough to fail the SoftAP's WPA2 handshake with the display
   (reason code 15) — breaking S3 too without the hub ever crashing.
-- **Open problem, start here next session**: with the watchdog now
-  recovering instead of hanging, it's visible that the hub's link to
-  the router disconnects/reconnects every ~6-8s on its own, cycling
-  between different BSSIDs on a network called "Amira_Guest" — looks
-  like mesh/guest-network policy (session limits, band-steering),
-  not a firmware defect. Worth asking whether the hub should join the
-  main network instead. See docs/boards.md's "DTR/RTS theory tested
-  directly, and refuted; two real bugs found and fixed instead" section.
+- The ~8s router reconnect cycle seen after adding the watchdog was the
+  watchdog itself: "Amira_Guest"'s gateway never answers ICMP, so every
+  connection looked stalled. Fixed — the hub watchdog now arms only after
+  a first reply. Side effect of no replies: S1 CSI is only ~2-5 pkt/s.
+- **In progress**: nearby phone detection (BLE + Wi-Fi sniffing on the
+  hub, Phones page on the display) — see the "CURRENT CHANGE" section of
+  the plan file named in docs/boards.md. Deferred items are listed in
+  docs/boards.md's "Backlog" section.
 
 ## Hub↔display link (the "second sensing node")
 

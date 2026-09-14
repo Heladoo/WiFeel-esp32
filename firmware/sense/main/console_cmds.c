@@ -240,6 +240,11 @@ static int cmd_status(int argc, char **argv)
         printf(" (warming up, not enough history yet)");
     }
     printf("\n");
+    if (ping_gw_is_running()) {
+        printf("S1 gateway ping: %s\n", ping_gw_has_succeeded()
+               ? "answering"
+               : "no replies (network doesn't answer ICMP; S1 watchdog inactive)");
+    }
 
     printf("motion:    fused=%u flag=%s  (S1 score=%u jitter=%.2f floor=%.2f, S3 score=%u jitter=%.2f floor=%.2f)\n",
            motion_get_score(), motion_get_flag() ? "MOTION" : "still",

@@ -31,7 +31,11 @@ static const char *TAG = "app_main";
  * too even though the hub itself never crashed. Poll how long it's been
  * since the last successful ping and force a reconnect if that
  * stretches out too long, rather than trusting the disconnect event
- * alone (same fix as firmware/display/main/link.c's watchdog). */
+ * alone (same fix as firmware/display/main/link.c's watchdog).
+ *
+ * Only armed once the gateway has answered at least once on the current
+ * connection: the "Amira_Guest" network never answers ICMP at all, and an
+ * unconditional watchdog there force-reconnected every ~8s forever. */
 #define S1_WATCHDOG_CHECK_INTERVAL_MS 2000
 #define S1_WATCHDOG_STALL_MS 5000
 
@@ -96,6 +100,9 @@ static void s1_ping_watchdog_task(void *arg)
 
         if (!ping_gw_is_running()) {
             continue; /* not connected yet, or a real disconnect already handled it */
+        }
+        if (!ping_gw_has_succeeded()) {
+            continue; /* gateway doesn't answer ICMP on this network — no liveness signal */
         }
         uint32_t stalled_ms = ping_gw_ms_since_last_success();
         if (stalled_ms < S1_WATCHDOG_STALL_MS) {

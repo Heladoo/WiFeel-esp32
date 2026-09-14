@@ -120,13 +120,10 @@ static void watchdog_task(void *arg)
         ESP_LOGW(TAG, "no successful ping in %" PRIu32 " ms — link looks dead but no "
                  "disconnect event fired; forcing a reconnect", stalled_ms);
         ping_gw_stop();
-        /* esp_wifi_disconnect() should itself trigger WIFI_EVENT_STA_DISCONNECTED,
-         * whose handler already does ping_gw_stop()+esp_wifi_connect() — but if
-         * the driver's internal state disagrees with what we're observing here
-         * (the whole reason this watchdog exists) that event might not come, so
-         * call esp_wifi_connect() directly too rather than wait on it. */
+        /* esp_wifi_disconnect() raises WIFI_EVENT_STA_DISCONNECTED (confirmed
+         * in the hub's live logs), whose handler reconnects. Calling
+         * esp_wifi_connect() here too raced with it. */
         esp_wifi_disconnect();
-        esp_wifi_connect();
     }
 }
 
