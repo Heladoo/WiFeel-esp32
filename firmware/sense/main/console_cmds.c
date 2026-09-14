@@ -1,24 +1,29 @@
 #include "console_cmds.h"
 
 #include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
 #include <inttypes.h>
 #include "esp_console.h"
 #include "esp_log.h"
-#include "esp_heap_caps.h"
+#include "esp_system.h"
 #include "esp_mac.h"
+#include "esp_wifi.h"
 #include "lwip/ip4_addr.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "wifi_mgr.h"
 #include "csi_mgr.h"
 #include "ping_gw.h"
+#include "espnow_rx_test.h"
+#include "motion.h"
 #include "board.h"
 #include "wifeel_csi.h"
 
 static const char *TAG = "console";
 
-/* ~100 Hz per the plan's JOIN mode design. */
-#define JOIN_PING_INTERVAL_MS 10
-#define JOIN_TIMEOUT_MS       15000
+#define JOIN_TIMEOUT_MS 15000
 
 static int cmd_join(int argc, char **argv)
 {
@@ -36,6 +41,10 @@ static int cmd_join(int argc, char **argv)
         return 1;
     }
 
+    /* CSI + gateway-ping setup happens automatically via wifi_mgr's
+     * connected-callback (see app_main.c's on_wifi_connected) — it fires
+     * for this join same as it would for an automatic NVS-based reconnect
+     * on a future boot, so this command doesn't duplicate that logic. */
     uint8_t bssid[6];
     uint8_t channel = 0;
     esp_ip4_addr_t gw = {0};
@@ -43,22 +52,120 @@ static int cmd_join(int argc, char **argv)
     ESP_ERROR_CHECK(wifi_mgr_get_ap_channel(&channel));
     ESP_ERROR_CHECK(wifi_mgr_get_gateway_ip(&gw));
 
-    err = csi_mgr_set_source_mac(WIFEEL_STREAM_ROUTER_TO_HUB, bssid);
-    if (err != ESP_OK) {
-        printf("warning: csi_mgr_set_source_mac failed: %s\n", esp_err_to_name(err));
-    }
-    err = csi_mgr_set_enabled(true);
-    if (err != ESP_OK) {
-        printf("warning: csi_mgr_set_enabled failed: %s\n", esp_err_to_name(err));
-    }
-    err = ping_gw_start(&gw, JOIN_PING_INTERVAL_MS);
-    if (err != ESP_OK) {
-        printf("warning: ping_gw_start failed: %s\n", esp_err_to_name(err));
-    }
-
     printf("joined. AP=" MACSTR " channel=%u gateway=" IPSTR "\n"
-           "pinging gateway every %d ms — run 'status' in a few seconds to check S1 pkt/s\n",
-           MAC2STR(bssid), channel, IP2STR(&gw), JOIN_PING_INTERVAL_MS);
+           "run 'status' in a few seconds to check S1 pkt/s\n",
+           MAC2STR(bssid), channel, IP2STR(&gw));
+    return 0;
+}
+
+/* TEMPORARY diagnostic (milestone 4 hardware bring-up, no password needed):
+ * tune to a channel and track a target MAC's CSI WITHOUT associating —
+ * to test whether CSI is only ever reported for traffic outside our own
+ * active association (see csi_mgr.c's on_csi diagnostic logging). This is
+ * mechanically the core of the plan's PASSIVE mode, tested early. Not
+ * wired into the real PASSIVE console command yet — that's milestone 5. */
+static int cmd_sniff(int argc, char **argv)
+{
+    if (argc < 3) {
+        printf("usage: sniff <bssid AA:BB:CC:DD:EE:FF> <channel>\n");
+        return 1;
+    }
+    uint8_t mac[6];
+    int vals[6];
+    if (sscanf(argv[1], "%x:%x:%x:%x:%x:%x", &vals[0], &vals[1], &vals[2], &vals[3], &vals[4], &vals[5]) != 6) {
+        printf("bad bssid format\n");
+        return 1;
+    }
+    for (int i = 0; i < 6; i++) {
+        mac[i] = (uint8_t)vals[i];
+    }
+    uint8_t channel = (uint8_t)atoi(argv[2]);
+
+    /* Stop the gateway ping FIRST — otherwise once we disconnect below it
+     * floods the log with "ping_sock: send error" at ~100Hz (learned the
+     * hard way: it swamped an earlier sniff test's output before any real
+     * CSI data could be seen). */
+    ping_gw_stop();
+
+    /* Stop the driver from immediately reconnecting us to the last-joined
+     * AP — otherwise association happens within ~500ms and defeats the
+     * point of this test (capturing CSI WITHOUT being associated). */
+    wifi_mgr_set_auto_reconnect(false);
+    wifi_mgr_disconnect();
+    vTaskDelay(pdMS_TO_TICKS(200));
+
+    esp_err_t err = esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
+    if (err != ESP_OK) {
+        printf("esp_wifi_set_channel failed: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+    uint8_t actual_primary = 0;
+    wifi_second_chan_t actual_second = WIFI_SECOND_CHAN_NONE;
+    esp_wifi_get_channel(&actual_primary, &actual_second);
+    csi_mgr_set_source_mac(WIFEEL_STREAM_ROUTER_TO_HUB, mac);
+    csi_mgr_set_enabled(true);
+
+    printf("sniffing channel %u (readback: actually on %u) for " MACSTR
+           " (not associating) — check 'status' or watch the raw-frame log\n",
+           channel, actual_primary, MAC2STR(mac));
+    return 0;
+}
+
+/* TEMPORARY diagnostic: retarget S1's tracked MAC without touching Wi-Fi
+ * state at all (no disconnect, no channel change) — for testing CSI on
+ * co-channel non-associated traffic (e.g. another board's ESP-NOW frames
+ * on the same channel as our current AP) while staying connected. */
+static int cmd_track(int argc, char **argv)
+{
+    if (argc < 2) {
+        printf("usage: track <mac AA:BB:CC:DD:EE:FF>\n");
+        return 1;
+    }
+    uint8_t mac[6];
+    int vals[6];
+    if (sscanf(argv[1], "%x:%x:%x:%x:%x:%x", &vals[0], &vals[1], &vals[2], &vals[3], &vals[4], &vals[5]) != 6) {
+        printf("bad mac format\n");
+        return 1;
+    }
+    for (int i = 0; i < 6; i++) {
+        mac[i] = (uint8_t)vals[i];
+    }
+    csi_mgr_set_source_mac(WIFEEL_STREAM_ROUTER_TO_HUB, mac);
+    csi_mgr_set_enabled(true);
+    printf("S1 now tracking " MACSTR " (Wi-Fi state untouched, still on whatever channel we were on)\n",
+           MAC2STR(mac));
+    return 0;
+}
+
+/* TEMPORARY diagnostic: plain ESP-NOW reception, no CSI — isolates
+ * "not reaching us" from "reaching us but CSI doesn't tap it". */
+static int cmd_espnow_rx(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    esp_err_t err = espnow_rx_test_start();
+    if (err != ESP_OK) {
+        printf("espnow_rx_test_start failed: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+    printf("ESP-NOW RX test running — watch the log for incoming frames\n");
+    return 0;
+}
+
+/* Streams live motion readings for tuning against a real "walk past the
+ * hub" test — watch raw_jitter/score change as you move. */
+static int cmd_motion(int argc, char **argv)
+{
+    int seconds = (argc >= 2) ? atoi(argv[1]) : 20;
+    if (seconds <= 0) {
+        seconds = 20;
+    }
+    printf("streaming motion readings for %d s (Ctrl+C not supported here — just wait it out)\n", seconds);
+    for (int i = 0; i < seconds * 1000 / 300; i++) {
+        printf("score=%3u flag=%-6s raw_jitter=%.2f\n", motion_get_score(),
+               motion_get_flag() ? "MOTION" : "still", (double)motion_get_raw_jitter());
+        vTaskDelay(pdMS_TO_TICKS(300));
+    }
     return 0;
 }
 
@@ -72,19 +179,21 @@ static int cmd_status(int argc, char **argv)
     printf("free heap: %" PRIu32 " bytes\n", (uint32_t)esp_get_free_heap_size());
 
     if (!wifi_mgr_is_connected()) {
-        printf("wifi:      not connected — try 'join <ssid> [password]'\n");
-        return 0;
+        printf("wifi:      not connected (try 'join <ssid> [password]', or this may be "
+               "intentional — 'sniff'/'track' don't associate)\n");
+    } else {
+        uint8_t bssid[6];
+        uint8_t channel = 0;
+        esp_ip4_addr_t gw = {0};
+        wifi_mgr_get_ap_bssid(bssid);
+        wifi_mgr_get_ap_channel(&channel);
+        wifi_mgr_get_gateway_ip(&gw);
+        printf("wifi:      connected, AP=" MACSTR " channel=%u gateway=" IPSTR "\n",
+               MAC2STR(bssid), channel, IP2STR(&gw));
     }
 
-    uint8_t bssid[6];
-    uint8_t channel = 0;
-    esp_ip4_addr_t gw = {0};
-    wifi_mgr_get_ap_bssid(bssid);
-    wifi_mgr_get_ap_channel(&channel);
-    wifi_mgr_get_gateway_ip(&gw);
-    printf("wifi:      connected, AP=" MACSTR " channel=%u gateway=" IPSTR "\n",
-           MAC2STR(bssid), channel, IP2STR(&gw));
-
+    /* CSI reporting below doesn't require an active Wi-Fi connection —
+     * 'sniff'/'track' both run CSI while disconnected (see their docs). */
     printf("csi:       %s\n", csi_mgr_is_enabled() ? "enabled" : "disabled");
 
     wifeel_csi_stream_t *s1 = csi_mgr_get_stream(WIFEEL_STREAM_ROUTER_TO_HUB);
@@ -100,6 +209,9 @@ static int cmd_status(int argc, char **argv)
         printf(" (warming up, not enough history yet)");
     }
     printf("\n");
+
+    printf("motion:    score=%u flag=%s raw_jitter=%.2f\n", motion_get_score(),
+           motion_get_flag() ? "MOTION" : "still", (double)motion_get_raw_jitter());
     return 0;
 }
 
@@ -143,6 +255,38 @@ esp_err_t console_start(void)
         .func = &cmd_status,
     };
     ESP_ERROR_CHECK(esp_console_cmd_register(&status_cmd));
+
+    const esp_console_cmd_t sniff_cmd = {
+        .command = "sniff",
+        .help = "[diagnostic] Track CSI for a MAC on a channel WITHOUT associating",
+        .hint = "<bssid> <channel>",
+        .func = &cmd_sniff,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&sniff_cmd));
+
+    const esp_console_cmd_t track_cmd = {
+        .command = "track",
+        .help = "[diagnostic] Retarget S1's tracked MAC without touching Wi-Fi state",
+        .hint = "<mac>",
+        .func = &cmd_track,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&track_cmd));
+
+    const esp_console_cmd_t espnow_rx_cmd = {
+        .command = "espnow_rx",
+        .help = "[diagnostic] Start a plain ESP-NOW receiver (no CSI) to check raw reception",
+        .hint = NULL,
+        .func = &cmd_espnow_rx,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&espnow_rx_cmd));
+
+    const esp_console_cmd_t motion_cmd = {
+        .command = "motion",
+        .help = "Stream live motion score/jitter readings (for walk-by tuning)",
+        .hint = "[seconds]",
+        .func = &cmd_motion,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&motion_cmd));
 
     return esp_console_start_repl(repl);
 }

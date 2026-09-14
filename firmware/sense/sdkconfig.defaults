@@ -17,6 +17,17 @@ CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 # --- Wi-Fi CSI ---
 CONFIG_ESP_WIFI_CSI_ENABLED=y
 
+# TESTING (milestone 4 hardware bring-up): disable A-MPDU frame aggregation
+# in both directions. On real hardware, our own AP's traffic negotiated a
+# block-ack/AMPDU session (visible as [ADDBA] in the boot log) almost
+# immediately, and CSI callbacks essentially never fired for our own
+# traffic afterward while still firing (rarely) for other nearby devices'
+# unaggregated frames — this may be why. Espressif's own older esp-radar
+# console_test example also ships with AMPDU TX explicitly disabled.
+# Revert this (or determine it didn't help) once real pkt/s numbers are in.
+CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=n
+CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=n
+
 # --- FreeRTOS tick rate: finer-grained timing for the ~10ms JOIN-mode
 # ping interval (ping_gw.c) and the 20Hz CSI resampling grid (wifeel_csi). ---
 CONFIG_FREERTOS_HZ=1000

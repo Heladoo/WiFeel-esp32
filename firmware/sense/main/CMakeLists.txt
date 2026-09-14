@@ -5,6 +5,8 @@ idf_component_register(
         "wifi_mgr.c"
         "csi_mgr.c"
         "ping_gw.c"
+        "espnow_rx_test.c"
+        "motion.c"
         "console_cmds.c"
     INCLUDE_DIRS "."
     REQUIRES

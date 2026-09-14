@@ -110,6 +110,17 @@ bool wifeel_csi_stream_get_features(const wifeel_csi_stream_t *stream, wifeel_ms
  *  link-health UI (Status page) can read it without recomputing features. */
 float wifeel_csi_stream_get_pkt_rate(const wifeel_csi_stream_t *stream);
 
+/**
+ * Fast-reacting jitter estimate: an exponential moving average of the
+ * amplitude change between consecutive real samples, updated once per
+ * sample rather than over wifeel_csi_stream_get_features()'s multi-sample
+ * ring window. Use this for motion detection (P1) — at real, sparse CSI
+ * arrival rates (a few Hz, not the nominal 20Hz grid), the ring-buffer
+ * window can span many seconds, too slow to react to someone walking by.
+ * Returns 0 before the first two samples have arrived.
+ */
+float wifeel_csi_stream_get_fast_jitter(const wifeel_csi_stream_t *stream);
+
 #ifdef __cplusplus
 }
 #endif

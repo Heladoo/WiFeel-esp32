@@ -1,0 +1,22 @@
+# WiFeel display (Waveshare ESP32-C6-Touch-AMOLED-1.43) — project-specific
+# sdkconfig overrides. Target selected separately via
+# `idf.py set-target esp32c6` (see CLAUDE.md).
+
+# --- Flash / partition table ---
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# --- Console over the board's native USB (no separate UART bridge chip;
+# same reasoning as firmware/sense's sdkconfig.defaults). ---
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+CONFIG_FREERTOS_HZ=1000
+
+# --- LVGL: only the font sizes the plan's UI actually uses (see the UI
+# memory-budget section — no PSRAM on this board, keep font ROM small). ---
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_20=y
+CONFIG_LV_FONT_MONTSERRAT_28=y
+CONFIG_LV_FONT_MONTSERRAT_48=y

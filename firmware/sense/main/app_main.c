@@ -1,40 +1,55 @@
 #include <inttypes.h>
 #include "esp_log.h"
-#include "esp_heap_caps.h"
+#include "esp_system.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "esp_mac.h"
+
 #include "board.h"
 #include "wifi_mgr.h"
 #include "csi_mgr.h"
+#include "ping_gw.h"
+#include "motion.h"
 #include "console_cmds.h"
 
 static const char *TAG = "app_main";
 
-/* Prints S1 pkt/s periodically once connected, so a plain boot-log capture
- * (tools/serial_log.py, no interactive 'status' needed) is enough to check
- * milestone 4's "S1 >= 80 pkt/s" target — see the esp32-firmware-flashing
- * skill's post-flash verification step and CLAUDE.md. */
-static void feature_log_task(void *arg)
+/* ~100 Hz per the plan's JOIN mode design. */
+#define JOIN_PING_INTERVAL_MS 10
+
+/*
+ * Fires on EVERY successful Wi-Fi connection (see wifi_mgr_set_connected_cb)
+ * — an explicit `join` console command, but also ESP-IDF's automatic
+ * reconnect on boot using NVS-persisted credentials, which happens with no
+ * app code asking for it. Without this living here, CSI capture and the
+ * gateway ping only ever got armed by cmd_join() itself, so the very
+ * common case of "board reboots and reconnects on its own" silently never
+ * captured any CSI — found by testing on real hardware, not guessed. */
+static void on_wifi_connected(void)
 {
-    (void)arg;
-    for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(2000));
-        if (!wifi_mgr_is_connected() || !csi_mgr_is_enabled()) {
-            continue;
-        }
-        wifeel_csi_stream_t *s1 = csi_mgr_get_stream(WIFEEL_STREAM_ROUTER_TO_HUB);
-        float pkt_rate = wifeel_csi_stream_get_pkt_rate(s1);
-        wifeel_msg_features_t feat;
-        if (wifeel_csi_stream_get_features(s1, &feat)) {
-            ESP_LOGI(TAG, "S1: %.1f pkt/s  mean_amp=%.2f wander=%.2f jitter=%.2f",
-                     (double)pkt_rate, (double)feat.mean_amplitude, (double)feat.wander,
-                     (double)feat.jitter_energy);
-        } else {
-            ESP_LOGI(TAG, "S1: %.1f pkt/s  (warming up)", (double)pkt_rate);
-        }
+    uint8_t bssid[6];
+    esp_ip4_addr_t gw = {0};
+    if (wifi_mgr_get_ap_bssid(bssid) != ESP_OK || wifi_mgr_get_gateway_ip(&gw) != ESP_OK) {
+        ESP_LOGW(TAG, "connected but AP info not ready yet, skipping CSI/ping setup");
+        return;
     }
+
+    esp_err_t err = csi_mgr_set_source_mac(WIFEEL_STREAM_ROUTER_TO_HUB, bssid);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "csi_mgr_set_source_mac failed: %s", esp_err_to_name(err));
+    }
+    err = csi_mgr_set_enabled(true);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "csi_mgr_set_enabled failed: %s", esp_err_to_name(err));
+    }
+    err = ping_gw_start(&gw, JOIN_PING_INTERVAL_MS);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "ping_gw_start failed: %s", esp_err_to_name(err));
+    }
+
+    ESP_LOGI(TAG, "CSI+ping configured for AP " MACSTR, MAC2STR(bssid));
 }
 
 void app_main(void)
@@ -47,8 +62,12 @@ void app_main(void)
     ESP_ERROR_CHECK(err);
 
     ESP_ERROR_CHECK(board_init());
+    /* Must be registered before wifi_mgr_init() — see wifi_mgr.h — so a
+     * same-boot auto-reconnect can't fire before it's set. */
+    wifi_mgr_set_connected_cb(&on_wifi_connected);
     ESP_ERROR_CHECK(wifi_mgr_init());
     ESP_ERROR_CHECK(csi_mgr_init());
+    ESP_ERROR_CHECK(motion_init());
 
     ESP_LOGI(TAG, "==================================================");
     ESP_LOGI(TAG, " WiFeel sense (hub)  fw=%s  target=%s", WIFEEL_SENSE_FW_VERSION, CONFIG_IDF_TARGET);
@@ -56,7 +75,10 @@ void app_main(void)
     ESP_LOGI(TAG, " free heap: %" PRIu32 " bytes", (uint32_t)esp_get_free_heap_size());
     ESP_LOGI(TAG, "==================================================");
 
-    xTaskCreate(&feature_log_task, "feature_log", 3072, NULL, tskIDLE_PRIORITY + 2, NULL);
-
+    /* No automatic periodic status logging: it was found on real hardware
+     * to make the console genuinely unusable (log lines interleave with
+     * typed input over the single shared USB-Serial-JTAG port). Use the
+     * `status` console command on demand instead — cheap to run, and it
+     * doesn't fight the user for the terminal. */
     ESP_ERROR_CHECK(console_start());
 }

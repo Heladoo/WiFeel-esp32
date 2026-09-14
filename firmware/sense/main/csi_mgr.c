@@ -1,6 +1,7 @@
 #include "csi_mgr.h"
 
 #include <string.h>
+#include <inttypes.h>
 #include "esp_wifi.h"
 #include "esp_mac.h"
 #include "esp_log.h"
@@ -28,11 +29,24 @@ static tracked_stream_t *find_slot(wifeel_stream_id_t id)
     return &s_tracked[id];
 }
 
+/* TEMPORARY diagnostic (milestone 4 hardware bring-up): unconditional
+ * counter + rate-limited log of every raw CSI frame's source MAC,
+ * regardless of whether it matches a tracked stream — to tell apart "the
+ * callback never fires" from "it fires but nothing matches our filter".
+ * Remove once real hardware confirms the pkt/s pipeline end-to-end. */
+static volatile uint32_t s_debug_total_frames;
+
 static void IRAM_ATTR on_csi(void *ctx, wifi_csi_info_t *data)
 {
     (void)ctx;
     if (!data) {
         return;
+    }
+
+    s_debug_total_frames++;
+    if (s_debug_total_frames <= 20 || (s_debug_total_frames % 20) == 0) {
+        ESP_EARLY_LOGI(TAG, "raw CSI frame #%" PRIu32 " from " MACSTR " len=%u",
+                       s_debug_total_frames, MAC2STR(data->mac), data->len);
     }
     for (size_t i = 0; i < WIFEEL_NUM_STREAMS; i++) {
         tracked_stream_t *t = &s_tracked[i];
@@ -56,28 +70,69 @@ esp_err_t csi_mgr_init(void)
         return ESP_ERR_NO_MEM;
     }
 
-    esp_err_t err = esp_wifi_set_csi_rx_cb(&on_csi, NULL);
+    /* Required even though the hub is (or will be) associated to an AP as
+     * a STA: the CSI extraction hardware only taps frames seen via the
+     * promiscuous RX path, not the normal STA data path. Confirmed against
+     * Espressif's own esp-csi get-started/csi_recv example, which calls
+     * this first, before esp_wifi_set_csi_config() — without it, CSI never
+     * fires at all (esp_wifi_set_csi(true) "succeeds" but no callback ever
+     * runs), which is silent and easy to miss without a real pkt/s check.
+     * Safe to enable alongside an active STA connection: it just adds a
+     * monitoring tap and doesn't disrupt normal association/IP traffic. */
+    esp_err_t err = esp_wifi_set_promiscuous(true);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_set_promiscuous failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    err = esp_wifi_set_csi_rx_cb(&on_csi, NULL);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_wifi_set_csi_rx_cb failed: %s", esp_err_to_name(err));
         return err;
     }
 
-    /* Only fields common to both wifi_csi_acquire_config_t layouts (see
-     * wifeel_csi.c's comment on esp_wifi_types_native.h) are set here, so
-     * this compiles the same regardless of which SOC_WIFI_MAC_VERSION_NUM
-     * variant applies to the target. */
+    /* wifi_csi_config_t is a completely different struct depending on
+     * whether the target has an HE (Wi-Fi 6) radio (see
+     * esp_wifi_types_native.h, and wifeel_csi.c's comment on the same) —
+     * not just different field names within one shape, as an earlier
+     * version of this code assumed. That earlier "portable" version
+     * compiled fine here (esp32c6 is HE) but would NOT have compiled at
+     * all on a non-HE target like esp32c3, and — the actual bug that sent
+     * pkt/s to zero on real hardware — silently omitted
+     * .acquire_csi_he_stbc, which Espressif's own esp-csi reference
+     * example sets explicitly for esp32c6. Values below are copied from
+     * that reference (esp-csi/examples/get-started/csi_recv), not
+     * guessed. */
+#if CONFIG_SOC_WIFI_HE_SUPPORT
     wifi_csi_config_t csi_config = {
-        .enable = 1,
-        .acquire_csi_legacy = 0,
-        .acquire_csi_ht20 = 1,
-        .acquire_csi_ht40 = 1,
-        .acquire_csi_su = 1,
-        .acquire_csi_mu = 1,
-        .acquire_csi_dcm = 1,
-        .acquire_csi_beamformed = 1,
-        .val_scale_cfg = 0, /* automatic scaling */
-        .dump_ack_en = 0,
+        .enable = true,
+        /* TESTING: legacy=true (unlike the reference config, which leaves
+         * this off) — ESP-NOW broadcast frames may go out at a legacy/
+         * basic PHY rate for reliability, which acquire_csi_legacy=false
+         * would silently exclude from CSI entirely. See docs/boards.md's
+         * DIRECT-mode CSI test notes. */
+        .acquire_csi_legacy = true,
+        .acquire_csi_ht20 = true,
+        .acquire_csi_ht40 = true,
+        .acquire_csi_su = true,
+        .acquire_csi_mu = true,
+        .acquire_csi_dcm = true,
+        .acquire_csi_beamformed = true,
+        .acquire_csi_he_stbc = 2,
+        .val_scale_cfg = 0,
+        .dump_ack_en = false,
     };
+#else
+    wifi_csi_config_t csi_config = {
+        .lltf_en = true,
+        .htltf_en = true,
+        .stbc_htltf2_en = true,
+        .ltf_merge_en = true,
+        .channel_filter_en = true,
+        .manu_scale = false,
+        .dump_ack_en = false,
+    };
+#endif
     err = esp_wifi_set_csi_config(&csi_config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_wifi_set_csi_config failed: %s", esp_err_to_name(err));

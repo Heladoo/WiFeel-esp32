@@ -41,6 +41,16 @@ struct wifeel_csi_stream {
     float    last_pkt_rate;
     bool     have_first_frame;
 
+    /* Fast, per-sample jitter EMA — reacts within a sample or two,
+     * unlike wifeel_csi_stream_get_features()'s ring-buffer window (see
+     * wifeel_csi.h's docs: at real (sparse, irregular) arrival rates the
+     * ring can span many seconds, too slow for motion detection). Updated
+     * once per finalized grid bucket, i.e. once per real sample, not on a
+     * fixed timer. */
+    bool     fast_jitter_has_prev;
+    float    fast_jitter_prev_amp;
+    float    fast_jitter_ema;
+
     /* Calibrated empty-room baseline (see wifeel_csi_stream_calibrate_start). */
     float    baseline_amplitude;
     float    baseline_group_energy[WIFEEL_CSI_SUBCARRIER_GROUPS];
@@ -107,6 +117,19 @@ static void bucket_finalize_and_push(wifeel_csi_stream_t *s)
     }
     int8_t mean_rssi = (int8_t)(s->bucket_sum_rssi / (int32_t)s->bucket_n);
     ring_push(s, mean_amp, mean_group, mean_rssi);
+
+    /* Fast jitter EMA: reacts on this one new real sample, not on a
+     * multi-second window. alpha=0.35 settles to ~85% of a step change
+     * within about 4 samples — at the ~3-4 Hz real-world rate this session
+     * measured, that's roughly a 1s reaction time, which is what P1
+     * (motion) needs. */
+    if (s->fast_jitter_has_prev) {
+        float diff = fabsf(mean_amp - s->fast_jitter_prev_amp);
+        const float alpha = 0.35f;
+        s->fast_jitter_ema = alpha * diff + (1.0f - alpha) * s->fast_jitter_ema;
+    }
+    s->fast_jitter_prev_amp = mean_amp;
+    s->fast_jitter_has_prev = true;
 
     if (s->calibrating) {
         s->calib_sum_amp += mean_amp;
@@ -338,4 +361,9 @@ bool wifeel_csi_stream_get_features(const wifeel_csi_stream_t *stream, wifeel_ms
 float wifeel_csi_stream_get_pkt_rate(const wifeel_csi_stream_t *stream)
 {
     return stream ? stream->last_pkt_rate : 0.0f;
+}
+
+float wifeel_csi_stream_get_fast_jitter(const wifeel_csi_stream_t *stream)
+{
+    return stream ? stream->fast_jitter_ema : 0.0f;
 }

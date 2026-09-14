@@ -18,20 +18,41 @@ static EventGroupHandle_t s_events;
 static esp_netif_t *s_sta_netif;
 static bool s_initialized;
 static bool s_connected;
+static wifi_mgr_connected_cb_t s_connected_cb;
+static bool s_auto_reconnect = true;
+
+void wifi_mgr_set_connected_cb(wifi_mgr_connected_cb_t cb)
+{
+    s_connected_cb = cb;
+}
+
+void wifi_mgr_set_auto_reconnect(bool enabled)
+{
+    s_auto_reconnect = enabled;
+}
 
 static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg;
     (void)data;
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
+        if (s_auto_reconnect) {
+            esp_wifi_connect();
+        }
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         s_connected = false;
-        ESP_LOGW(TAG, "disconnected, retrying");
-        esp_wifi_connect();
+        if (s_auto_reconnect) {
+            ESP_LOGW(TAG, "disconnected, retrying");
+            esp_wifi_connect();
+        } else {
+            ESP_LOGI(TAG, "disconnected (auto-reconnect suppressed)");
+        }
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         s_connected = true;
         xEventGroupSetBits(s_events, WIFI_CONNECTED_BIT);
+        if (s_connected_cb) {
+            s_connected_cb();
+        }
     }
 }
 
