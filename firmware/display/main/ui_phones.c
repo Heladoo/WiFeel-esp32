@@ -63,13 +63,23 @@ static uint32_t vendor_color(uint8_t vendor)
  * meanings"). "Unknown" spelled out rather than "?" (reported live: "dont
  * show '?' show Unknown or similar") — this is the classifier's honest
  * answer when an advert/frame carried no manufacturer data we recognize,
- * not an error. */
+ * not an error.
+ *
+ * WIFEEL_VENDOR_GOOGLE reads as "Android" here, not "Google": live raw
+ * captures (2026-09-15, `phones raw`) showed every device this session has
+ * actually classified as Google is the 0xFCF1 service-data case in
+ * ble_scan.c — Android/Google Play Services' own background "Nearby"
+ * beacon, which fires from ANY Android phone (this project has seen it
+ * fire alongside a Samsung phone's own manufacturer-data advert, same
+ * device, two adverts) — not evidence of Google-branded hardware nearby.
+ * "Google" as a vendor label would read as "there's a Pixel/Chromecast/
+ * Nest here," which is the wrong takeaway. */
 static const char *vendor_label_text(uint8_t vendor)
 {
     switch ((wifeel_vendor_t)vendor) {
         case WIFEEL_VENDOR_APPLE:     return "Apple";
         case WIFEEL_VENDOR_SAMSUNG:   return "Samsung";
-        case WIFEEL_VENDOR_GOOGLE:    return "Google";
+        case WIFEEL_VENDOR_GOOGLE:    return "Android";
         case WIFEEL_VENDOR_MICROSOFT: return "MSFT";
         case WIFEEL_VENDOR_OTHER:     return "Other";
         default:                      return "Unknown";

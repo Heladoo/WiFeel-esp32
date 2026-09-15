@@ -786,6 +786,49 @@ devices**: always pass the vendor name, e.g. `phones calib ble 30
 samsung` — the unfiltered form is only safe when the target device is
 provably the only/strongest BLE source in range for the whole window.
 
+## Identifying the "2 phones" and the "Google" device from raw captures (2026-09-15, later still)
+
+User asked what the second "phone" and the "Google" device actually
+are, and whether the display board itself could show up in the list.
+Answered from evidence, not guesses:
+
+- **`phones raw 15`** (real capture, min_rssi default) showed every AD
+  structure being classified. Every entry ble_scan.c currently scores
+  `phone=yes` was Samsung manufacturer data (company ID 0x0075) — zero
+  Google/company-0x00E0 manufacturer-data adverts were seen at all. Every
+  "Google" classification observed was AD type 0x16 (Service Data),
+  UUID 0xFCF1 — matches `GOOGLE_SERVICE_UUID`'s own doc comment
+  (`ble_scan.c`): Android/Google Play Services' "Nearby" background
+  beacon, already noted there as "confirmed live alongside a Samsung
+  phone's manufacturer-data advert" in an earlier session. It is
+  correctly scored `phone_like=false` (not counted in "phones nearby").
+  So: **the second "phone" is a second Samsung-classified BLE entry**
+  (not Google) — most likely the same physical Samsung phone appearing
+  under a second concurrently-active advert/address, since only one
+  Samsung device was reported present; can't be fully certain without
+  MAC-linking, which this project deliberately doesn't do (privacy
+  boundary, devices.h). **"Google" doesn't mean Google-branded
+  hardware** — it's Android's own OS-level beacon, which fires from any
+  Android phone including the Samsung one already being tracked.
+  Renamed the Phones tile's label from "Google" to "Android"
+  (`ui_phones.c`'s `vendor_label_text()`) to stop it reading as "a
+  Google device is here" when the evidence says otherwise. Left the
+  console's `wifeel_vendor_name()` as "Google" (technically accurate —
+  it IS Google's registered service UUID — and the console is the
+  precise/raw diagnostic surface; the display is the human-facing one).
+- Also confirmed from the raw capture: the `Other`-vendor entries (company
+  ID 0x005D, Broadcom) are almost certainly the Raspberry Pi, matching
+  the Broadcom-OUI-is-the-Pi finding already documented earlier this
+  session; the `Microsoft` entry (company ID 0x0006, a Swift-Pair-shaped
+  payload) is almost certainly the PC.
+- **The display board (DISP-1) cannot appear in this list at all**:
+  confirmed by code inspection, `firmware/display` never initializes
+  NimBLE/esp_bt (`grep` across the whole `firmware/display` tree found
+  nothing), so it never advertises over BLE. Its Wi-Fi association is
+  also to the hub's own private SoftAP, not the home network
+  `wifi_sniff.c` tracks — and its STA MAC is explicitly excluded there
+  anyway (`wifi_sniff_set_display_mac()`) as a second safety net.
+
 ## Backlog (deferred while phone detection is built)
 
 Phone detection (BLE + Wi-Fi sniffing, hub only) was prioritized ahead
