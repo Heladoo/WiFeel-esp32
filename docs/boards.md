@@ -578,6 +578,37 @@ Google-via-manufacturer-data remain provisional per the original plan.
 Sources used: [Bluetooth SIG company identifiers](https://bitbucket.org/bluetooth-SIG/public/raw/main/assigned_numbers/company_identifiers/company_identifiers.yaml),
 [Bluetooth SIG member UUIDs](https://bitbucket.org/bluetooth-SIG/public/raw/main/assigned_numbers/uuids/member_uuids.yaml).
 
+## Phone detection: device table + Wi-Fi sniffing (2026-09-15)
+
+Steps 3-4 of the phone-detection plan. `devices.c` tracks up to 32
+BLE/Wi-Fi sightings (median-of-5 + EMA RSSI smoothing, log-distance
+estimate, per-source expiry), fed via a non-blocking queue so radio
+callbacks never stall. `phones calib ble|wifi <s>` verified live: picked
+the strongest tracked entry and updated the 1m reference (-59.0 ->
+-29.0 dBm), all distances recomputed immediately.
+
+`wifi_sniff.c` adds a second promiscuous RX callback (alongside CSI's
+own) to see which clients are on the home network — only counts traffic
+whose BSSID is already known to be "home" (seeded from the hub's own
+association, grown from matching beacons). Correctly distinguishes
+client->AP frames (real RSSI, usable for distance) from AP->client
+frames (the AP's RSSI, presence-only — `devices_touch()`). Beacon-based
+mesh BSSID discovery confirmed live (home BSSID count went 1 -> 2 on its
+own). Zero Wi-Fi clients tracked so far — plausible given this board is
+2.4GHz-only and known nearby devices are likely on Ethernet/5GHz, not a
+confirmed bug; `phones` prints `data_frames_seen/not_home_bssid/
+excluded/tracked` counters to keep investigating without guessing.
+
+`phones selftest` now covers both the BLE classifier (4 real captured
+adverts) and the 802.11 parser (4 hand-derived synthetic frames: ToDS,
+FromDS, IBSS/WDS rejection, beacon SSID extraction) — 8/8 passing. The
+parser is split into pure functions (`wifi_sniff_parse_data_frame`,
+`wifi_sniff_parse_beacon`) shared by the real callback and the selftest,
+so a selftest failure would mean the live path is broken too.
+
+CSI unaffected: S3 still ~100 pkt/s with BLE at 25% duty and Wi-Fi
+sniffing both running.
+
 ## Backlog (deferred while phone detection is built)
 
 Phone detection (BLE + Wi-Fi sniffing, hub only) was prioritized ahead
