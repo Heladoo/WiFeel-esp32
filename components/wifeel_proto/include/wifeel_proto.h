@@ -221,6 +221,10 @@ typedef struct {
     uint8_t  distance_dm;  /* decimeters; 255 = unknown/out of range */
     uint8_t  connected;    /* bool: on the home Wi-Fi network (WIFEEL_DEV_SRC_WIFI only) */
     uint8_t  age_s;        /* seconds since last seen, capped at 255 */
+    uint8_t  phone_like;   /* bool: BLE classifier's phone/not-phone verdict (ble_scan.c).
+                             * Always 0 for WIFEEL_DEV_SRC_WIFI — there's no Wi-Fi vendor/type
+                             * classifier yet (see wifi_sniff.c), so a Wi-Fi entry can't claim
+                             * to be a phone vs a PC vs anything else. */
 } wifeel_msg_device_entry_t;
 
 #define WIFEEL_DEVICES_MAX_ENTRIES 8

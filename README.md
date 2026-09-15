@@ -113,11 +113,12 @@ phones calib wifi <seconds>  # same, for Wi-Fi-sourced distance estimates
 
 ## Using it
 
-- **Display, Home tile**: live motion indicator and a trend chart of the two
-  CSI streams (router→hub and display→hub).
-- **Display, Phones tile**: swipe left from Home. Shows nearby BLE devices
-  (ring gauge), devices confirmed on your Wi-Fi network, and a list of the
-  nearest ones with vendor and estimated distance.
+- **Display, Home tile**: top stats for nearby phones, presence, and motion,
+  plus a gridded trend chart of the two CSI streams (router→hub and
+  display→hub) with each line's live current value.
+- **Display, Phones tile**: swipe left from Home. Shows a nearby-phones
+  count, devices confirmed on your Wi-Fi network, and a nearest-first table
+  (source, type, vendor, rough range zone) of everything tracked.
 - **Hub console** (`status`, `phones`, `phones raw <seconds>`, `phones
   selftest`, `motion <seconds>`): live diagnostics — packet rates, RSSI,
   per-device detail, a self-test against known-good captured data.

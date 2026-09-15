@@ -1,11 +1,10 @@
 /**
  * "Phones" tile: nearby-device summary, smartwatch-vitals styled — a big
- * ring gauge for the headline metric, small icon tiles for secondary
- * counts, icon-led rows for individual devices. Deliberately light on
- * text (see app_main.c's build_home_screen() for the sibling Home tile's
- * plainer style) — vendor is a colored dot, source is a Bluetooth/Wi-Fi
- * glyph, "on home Wi-Fi" is implied by which icon a row uses rather than
- * a separate label.
+ * headline number (phones only) and a secondary Wi-Fi-clients number, both
+ * plain icon+number stats (no gauge — see app_main.c's build_home_screen()
+ * for the sibling Home tile's similar plain-number style), then a table of
+ * every tracked device sorted closest-first: source glyph (BLE/Wi-Fi),
+ * type glyph (phone/computer/other), vendor, and a range zone.
  */
 #pragma once
 

@@ -327,6 +327,7 @@ static uint8_t distance_to_dm(float meters)
 
 typedef struct {
     device_slot_t *slot;
+    float dist_m; /* cached so the sort below doesn't recompute powf() per comparison */
 } ranked_t;
 
 void devices_get_summary(wifeel_msg_devices_t *out)
@@ -343,7 +344,9 @@ void devices_get_summary(wifeel_msg_devices_t *out)
         if (!s->in_use || !s->rssi_ema_valid) {
             continue;
         }
-        ranked[n++].slot = s;
+        ranked[n].slot = s;
+        ranked[n].dist_m = distance_meters(s->source, s->rssi_ema);
+        n++;
         if (s->source == WIFEEL_DEV_SRC_BLE && s->phone_like) {
             out->ble_phone_count++;
         } else if (s->source == WIFEEL_DEV_SRC_WIFI) {
@@ -354,14 +357,19 @@ void devices_get_summary(wifeel_msg_devices_t *out)
         }
     }
 
-    /* Partial selection sort by strongest (closest) RSSI — n is at most
-     * MAX_DEVICES (32), so an O(n * WIFEEL_DEVICES_MAX_ENTRIES) pass here
-     * is cheap and avoids pulling in a full sort for 8 items. */
+    /* Partial selection sort by nearest (smallest) estimated distance — n is
+     * at most MAX_DEVICES (32), so an O(n * WIFEEL_DEVICES_MAX_ENTRIES) pass
+     * here is cheap and avoids pulling in a full sort for 8 items. Ranking
+     * by distance rather than raw RSSI matters because BLE and Wi-Fi use
+     * different 1m references (ref_1m) — a strong Wi-Fi RSSI and a strong
+     * BLE RSSI aren't the same physical distance, so comparing raw RSSI
+     * across sources produced a "closest first" order that wasn't actually
+     * closest-first whenever both sources were present. */
     int top = (n < WIFEEL_DEVICES_MAX_ENTRIES) ? n : WIFEEL_DEVICES_MAX_ENTRIES;
     for (int k = 0; k < top; k++) {
         int best_idx = k;
         for (int j = k + 1; j < n; j++) {
-            if (ranked[j].slot->rssi_ema > ranked[best_idx].slot->rssi_ema) {
+            if (ranked[j].dist_m < ranked[best_idx].dist_m) {
                 best_idx = j;
             }
         }
@@ -378,8 +386,9 @@ void devices_get_summary(wifeel_msg_devices_t *out)
         e->source = (uint8_t)s->source;
         e->vendor = (uint8_t)s->vendor;
         e->rssi = (int8_t)lroundf(s->rssi_ema);
-        e->distance_dm = distance_to_dm(distance_meters(s->source, s->rssi_ema));
+        e->distance_dm = distance_to_dm(ranked[k].dist_m);
         e->connected = s->connected ? 1 : 0;
+        e->phone_like = (s->source == WIFEEL_DEV_SRC_BLE && s->phone_like) ? 1 : 0;
         int64_t age_s = (now - s->last_seen_us) / 1000000;
         e->age_s = (age_s > 255) ? 255 : (uint8_t)age_s;
     }

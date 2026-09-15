@@ -1,4 +1,5 @@
 #include <inttypes.h>
+#include <stdio.h>
 #include "esp_log.h"
 #include "esp_system.h"
 #include "nvs_flash.h"
@@ -21,6 +22,12 @@
 #define LINK_STALE_MS 4000
 #define UI_UPDATE_INTERVAL_MS 333 /* matches the hub's ~3Hz broadcast rate */
 #define CHART_POINT_COUNT 80      /* ~26s of history at this update rate (user asked to double the original ~13s) */
+#define CHART_WINDOW_S ((CHART_POINT_COUNT * UI_UPDATE_INTERVAL_MS) / 1000)
+
+/* Mirrors firmware/sense/main/link.c's LINK_RATE_HZ — not a shared
+ * constant (the two firmware images don't share main/ code, only
+ * components/), just the same number, for the bottom status line. */
+#define HUB_BROADCAST_HZ 3
 
 /* Dark background for the whole app — set on the root screen and the
  * tileview itself, not just each tile, so no default-theme light
@@ -32,93 +39,158 @@
  * read as one system. */
 #define COLOR_S1 0x4FA8E8 /* blue */
 #define COLOR_S3 0xE8A33D /* amber — matches the indicator's "motion" color */
+#define COLOR_GREEN 0x3DAA6E  /* "still" / "present" */
+#define COLOR_GREY  0x3A4750  /* no data / empty */
+#define COLOR_MUTED 0x8FA3AD
 
 static const char *TAG = "app_main";
 
 /* UI objects the update task needs to keep touching — created once in
  * build_home_screen(), read/written only while holding the LVGL lock. */
-static lv_obj_t *s_indicator;
-static lv_obj_t *s_score_label;
+static lv_obj_t *s_stat_phones_icon;
+static lv_obj_t *s_stat_phones_count;
+static lv_obj_t *s_stat_presence_icon;
+static lv_obj_t *s_stat_presence_count;
+static lv_obj_t *s_stat_motion_icon;
+static lv_obj_t *s_stat_motion_count;
 static lv_obj_t *s_network_label;
 static lv_obj_t *s_link_label;
+static lv_obj_t *s_legend_s1;
+static lv_obj_t *s_legend_s3;
 static lv_obj_t *s_chart;
 static lv_chart_series_t *s_chart_s1;
 static lv_chart_series_t *s_chart_s3;
 
+/** One "vitals" stat: icon above a number above a small caption, all
+ *  vertically stacked off the icon so only the icon's own position needs
+ *  to be checked against the round display's bezel (see build_home_screen()'s
+ *  comment on the stat row's placement). Returns the icon and count labels
+ *  via out params; the caption is static text, created but not kept. */
+static void create_stat(lv_obj_t *parent, int16_t x, int16_t y, const char *icon,
+                         const char *caption, lv_obj_t **icon_out, lv_obj_t **count_out)
+{
+    lv_obj_t *icon_label = lv_label_create(parent);
+    lv_label_set_text(icon_label, icon);
+    lv_obj_set_style_text_font(icon_label, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_align(icon_label, LV_ALIGN_CENTER, x, y);
+
+    lv_obj_t *count_label = lv_label_create(parent);
+    lv_label_set_text(count_label, "--");
+    lv_obj_set_style_text_color(count_label, lv_color_hex(0xE8EEF2), LV_PART_MAIN);
+    lv_obj_set_style_text_font(count_label, &lv_font_montserrat_28, LV_PART_MAIN);
+    lv_obj_align_to(count_label, icon_label, LV_ALIGN_OUT_BOTTOM_MID, 0, 4);
+
+    lv_obj_t *caption_label = lv_label_create(parent);
+    lv_label_set_text(caption_label, caption);
+    lv_obj_set_style_text_color(caption_label, lv_color_hex(COLOR_MUTED), LV_PART_MAIN);
+    lv_obj_set_style_text_font(caption_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_align_to(caption_label, count_label, LV_ALIGN_OUT_BOTTOM_MID, 0, 2);
+
+    *icon_out = icon_label;
+    *count_out = count_label;
+}
+
 /** Builds the Home tile's widgets under `home_tile` (one tile of the
- *  top-level lv_tileview — see build_screen()). Unchanged from before the
- *  Phones tile existed, aside from creating on `home_tile` instead of the
- *  screen directly. */
+ *  top-level lv_tileview — see build_screen()). Three top "vitals" stats
+ *  (phones nearby, presence, motion) replace the old single big motion
+ *  circle+score — reported live: "top indicators: number of phones BT,
+ *  number of humen presence detected, is motion detected now." */
 static void build_home_screen(lv_obj_t *home_tile)
 {
     lv_obj_t *scr = home_tile;
     lv_obj_set_style_bg_color(scr, lv_color_hex(COLOR_BG), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, LV_PART_MAIN);
 
-    lv_obj_t *title = lv_label_create(scr);
-    lv_label_set_text(title, "WiFeel");
-    lv_obj_set_style_text_color(title, lv_color_hex(0x5A6B73), LV_PART_MAIN);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_20, LV_PART_MAIN);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 26);
-
-    s_network_label = lv_label_create(scr);
-    lv_label_set_text(s_network_label, "");
-    lv_obj_set_style_text_color(s_network_label, lv_color_hex(0x8FA3AD), LV_PART_MAIN);
-    lv_obj_set_style_text_font(s_network_label, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_align(s_network_label, LV_ALIGN_TOP_MID, 0, 52);
-
-    /* Motion indicator: a plain circle whose fill color is the whole
-     * story — grey (no data yet / link lost), green (still), amber
-     * (motion). Deliberately not an arc/gauge yet; that's real UI polish
-     * for a later milestone, this is "prove live data reaches the
-     * screen". Shrunk from an earlier version to make room for the
-     * trend chart below it. */
-    s_indicator = lv_obj_create(scr);
-    lv_obj_set_size(s_indicator, 120, 120);
-    lv_obj_set_style_radius(s_indicator, LV_RADIUS_CIRCLE, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(s_indicator, lv_color_hex(0x3A4750), LV_PART_MAIN);
-    lv_obj_set_style_border_width(s_indicator, 0, LV_PART_MAIN);
-    lv_obj_align(s_indicator, LV_ALIGN_CENTER, 0, -110);
-
-    s_score_label = lv_label_create(scr);
-    lv_label_set_text(s_score_label, "--");
-    lv_obj_set_style_text_color(s_score_label, lv_color_hex(0xE8EEF2), LV_PART_MAIN);
-    lv_obj_set_style_text_font(s_score_label, &lv_font_montserrat_48, LV_PART_MAIN);
-    lv_obj_align_to(s_score_label, s_indicator, LV_ALIGN_CENTER, 0, 0);
+    /* Stat row sits close to the top of the round display — only the
+     * icons' own y (-185) needs to clear the bezel width at that height;
+     * each stat's number/caption cascade downward from its icon via
+     * align_to, into progressively wider parts of the circle, so they
+     * can't clip once the icon itself fits. */
+    create_stat(scr, -110, -185, LV_SYMBOL_CALL, "phones", &s_stat_phones_icon, &s_stat_phones_count);
+    create_stat(scr, 0, -185, LV_SYMBOL_EYE_OPEN, "presence", &s_stat_presence_icon, &s_stat_presence_count);
+    create_stat(scr, 110, -185, LV_SYMBOL_REFRESH, "motion", &s_stat_motion_icon, &s_stat_motion_count);
 
     /* Trend chart: S1 (router->hub) and S3 (display->hub) motion scores
-     * over the last ~13s, so it's visible which sensing stream is
-     * actually driving a detection rather than just the fused number. */
-    lv_obj_t *legend_s1 = lv_label_create(scr);
-    lv_label_set_text(legend_s1, "S1 router");
-    lv_obj_set_style_text_color(legend_s1, lv_color_hex(COLOR_S1), LV_PART_MAIN);
-    lv_obj_set_style_text_font(legend_s1, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_align(legend_s1, LV_ALIGN_CENTER, -75, 5);
-
-    lv_obj_t *legend_s3 = lv_label_create(scr);
-    lv_label_set_text(legend_s3, "S3 display");
-    lv_obj_set_style_text_color(legend_s3, lv_color_hex(COLOR_S3), LV_PART_MAIN);
-    lv_obj_set_style_text_font(legend_s3, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_align(legend_s3, LV_ALIGN_CENTER, 75, 5);
-
+     * over the last CHART_WINDOW_S seconds, so it's visible which sensing
+     * stream is actually driving a detection rather than just the fused
+     * number. Grid lines + axis labels ("x/y grid units - time in sec,
+     * amplitude values") and a live current-value per legend (reported
+     * live) are added below. */
     s_chart = lv_chart_create(scr);
-    lv_obj_set_size(s_chart, 320, 130);
-    lv_obj_align(s_chart, LV_ALIGN_CENTER, 0, 85);
+    lv_obj_set_size(s_chart, 340, 170);
+    lv_obj_align(s_chart, LV_ALIGN_CENTER, 0, 55);
     lv_chart_set_type(s_chart, LV_CHART_TYPE_LINE);
     lv_chart_set_range(s_chart, LV_CHART_AXIS_PRIMARY_Y, 0, 100);
     lv_chart_set_point_count(s_chart, CHART_POINT_COUNT);
     lv_chart_set_update_mode(s_chart, LV_CHART_UPDATE_MODE_SHIFT);
+    lv_chart_set_div_line_count(s_chart, 3, 3); /* quartile grid lines, both axes */
     lv_obj_set_style_bg_color(s_chart, lv_color_hex(0x181E24), LV_PART_MAIN);
     lv_obj_set_style_border_width(s_chart, 0, LV_PART_MAIN);
     lv_obj_set_style_size(s_chart, 0, 0, LV_PART_INDICATOR); /* hide per-point marker dots, keep the line */
     s_chart_s1 = lv_chart_add_series(s_chart, lv_color_hex(COLOR_S1), LV_CHART_AXIS_PRIMARY_Y);
     s_chart_s3 = lv_chart_add_series(s_chart, lv_color_hex(COLOR_S3), LV_CHART_AXIS_PRIMARY_Y);
 
+    /* Y axis (amplitude/score, 0-100), inset into the chart's own top/
+     * bottom-left corners rather than placed outside it — keeps the label
+     * positions guaranteed to fit wherever the chart itself already fits,
+     * without separately re-checking the round bezel for each one. */
+    lv_obj_t *y_top = lv_label_create(scr);
+    lv_label_set_text(y_top, "100");
+    lv_obj_set_style_text_color(y_top, lv_color_hex(COLOR_MUTED), LV_PART_MAIN);
+    lv_obj_set_style_text_font(y_top, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_align_to(y_top, s_chart, LV_ALIGN_TOP_LEFT, 2, 1);
+
+    lv_obj_t *y_bottom = lv_label_create(scr);
+    lv_label_set_text(y_bottom, "0");
+    lv_obj_set_style_text_color(y_bottom, lv_color_hex(COLOR_MUTED), LV_PART_MAIN);
+    lv_obj_set_style_text_font(y_bottom, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_align_to(y_bottom, s_chart, LV_ALIGN_BOTTOM_LEFT, 2, -1);
+
+    /* X axis (time, seconds ago) — static text, the window size never
+     * changes at runtime. */
+    char oldest_label[8];
+    snprintf(oldest_label, sizeof(oldest_label), "-%ds", CHART_WINDOW_S);
+    lv_obj_t *x_left = lv_label_create(scr);
+    lv_label_set_text(x_left, oldest_label);
+    lv_obj_set_style_text_color(x_left, lv_color_hex(COLOR_MUTED), LV_PART_MAIN);
+    lv_obj_set_style_text_font(x_left, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_align_to(x_left, s_chart, LV_ALIGN_OUT_BOTTOM_LEFT, 2, 2);
+
+    lv_obj_t *x_right = lv_label_create(scr);
+    lv_label_set_text(x_right, "now");
+    lv_obj_set_style_text_color(x_right, lv_color_hex(COLOR_MUTED), LV_PART_MAIN);
+    lv_obj_set_style_text_font(x_right, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_align_to(x_right, s_chart, LV_ALIGN_OUT_BOTTOM_RIGHT, -2, 2);
+
+    /* Legend, doubling as each trace's current value (reported live: "show
+     * current value for each trace line") — text is rewritten every tick
+     * in ui_update_task(). */
+    s_legend_s1 = lv_label_create(scr);
+    lv_label_set_text(s_legend_s1, "S1 router --");
+    lv_obj_set_style_text_color(s_legend_s1, lv_color_hex(COLOR_S1), LV_PART_MAIN);
+    lv_obj_set_style_text_font(s_legend_s1, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_align_to(s_legend_s1, s_chart, LV_ALIGN_OUT_TOP_LEFT, 0, -4);
+
+    s_legend_s3 = lv_label_create(scr);
+    lv_label_set_text(s_legend_s3, "S3 display --");
+    lv_obj_set_style_text_color(s_legend_s3, lv_color_hex(COLOR_S3), LV_PART_MAIN);
+    lv_obj_set_style_text_font(s_legend_s3, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_align_to(s_legend_s3, s_chart, LV_ALIGN_OUT_TOP_RIGHT, 0, -4);
+
+    /* Bottom grey status area: network, firmware version, refresh rate.
+     * Anchored below the chart (which is itself already verified to fit
+     * the round bezel) rather than to fixed screen coordinates. */
+    s_network_label = lv_label_create(scr);
+    lv_label_set_text(s_network_label, "");
+    lv_obj_set_style_text_color(s_network_label, lv_color_hex(COLOR_MUTED), LV_PART_MAIN);
+    lv_obj_set_style_text_font(s_network_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_align_to(s_network_label, s_chart, LV_ALIGN_OUT_BOTTOM_MID, 0, 22);
+
     s_link_label = lv_label_create(scr);
     lv_label_set_text(s_link_label, "waiting for hub...");
-    lv_obj_set_style_text_color(s_link_label, lv_color_hex(0x8FA3AD), LV_PART_MAIN);
+    lv_obj_set_style_text_color(s_link_label, lv_color_hex(COLOR_MUTED), LV_PART_MAIN);
     lv_obj_set_style_text_font(s_link_label, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_align(s_link_label, LV_ALIGN_BOTTOM_MID, 0, -26);
+    lv_obj_align_to(s_link_label, s_network_label, LV_ALIGN_OUT_BOTTOM_MID, 0, 4);
 }
 
 /** Home tile + Phones tile, side by side in one horizontally-swipeable
@@ -143,6 +215,12 @@ static void build_screen(void)
     ui_phones_create(phones_tile);
 }
 
+static void set_stat_color(lv_obj_t *icon, lv_obj_t *count, uint32_t color)
+{
+    lv_obj_set_style_text_color(icon, lv_color_hex(color), LV_PART_MAIN);
+    lv_obj_set_style_text_color(count, lv_color_hex(color), LV_PART_MAIN);
+}
+
 static void ui_update_task(void *arg)
 {
     (void)arg;
@@ -163,24 +241,54 @@ static void ui_update_task(void *arg)
 
         ui_phones_update(have_devices, &devices, devices_age_ms);
 
+        /* Phones stat: nearby phones only — devices.c's ble_phone_count
+         * already excludes non-phone BLE devices (PCs, accessories),
+         * matching the Phones tile's own headline number. */
+        if (have_devices && devices_age_ms <= LINK_STALE_MS) {
+            lv_label_set_text_fmt(s_stat_phones_count, "%u", devices.ble_phone_count);
+            set_stat_color(s_stat_phones_icon, s_stat_phones_count, COLOR_S1);
+        } else {
+            lv_label_set_text(s_stat_phones_count, "--");
+            set_stat_color(s_stat_phones_icon, s_stat_phones_count, COLOR_GREY);
+        }
+
         if (!have) {
-            lv_obj_set_style_bg_color(s_indicator, lv_color_hex(0x3A4750), LV_PART_MAIN);
-            lv_label_set_text(s_score_label, "--");
+            lv_label_set_text(s_stat_presence_count, "--");
+            set_stat_color(s_stat_presence_icon, s_stat_presence_count, COLOR_GREY);
+            lv_label_set_text(s_stat_motion_count, "--");
+            set_stat_color(s_stat_motion_icon, s_stat_motion_count, COLOR_GREY);
             lv_label_set_text(s_link_label, "waiting for hub...");
         } else if (age_ms > LINK_STALE_MS) {
-            lv_obj_set_style_bg_color(s_indicator, lv_color_hex(0x3A4750), LV_PART_MAIN);
-            lv_label_set_text(s_score_label, "--");
+            lv_label_set_text(s_stat_presence_count, "--");
+            set_stat_color(s_stat_presence_icon, s_stat_presence_count, COLOR_GREY);
+            lv_label_set_text(s_stat_motion_count, "--");
+            set_stat_color(s_stat_motion_icon, s_stat_motion_count, COLOR_GREY);
             lv_label_set_text_fmt(s_link_label, "link lost (%" PRIu32 "s ago)", age_ms / 1000);
         } else {
-            uint32_t color = state.motion_flag ? COLOR_S3 : 0x3DAA6E /* green, "still" */;
-            lv_obj_set_style_bg_color(s_indicator, lv_color_hex(color), LV_PART_MAIN);
-            lv_label_set_text_fmt(s_score_label, "%u", state.motion_score);
-            lv_label_set_text(s_network_label, state.ssid[0] ? state.ssid : "(hub not connected)");
-            lv_label_set_text_fmt(s_link_label, "hub fw %s  \xc2\xb7  %" PRIu32 "ms ago",
-                                   state.fw_version, age_ms);
+            /* Presence: 0/1, not a real headcount — people_count (P3) isn't
+             * built yet (see firmware/sense/main/link.c, which sends it as
+             * an explicit 0 placeholder). presence_state (P2) IS real and
+             * calibrated, so this shows "is someone here" rather than
+             * fabricating a number people_count can't yet back up. */
+            bool present = state.presence_state != WIFEEL_PRESENCE_EMPTY;
+            lv_label_set_text_fmt(s_stat_presence_count, "%u", present ? 1u : 0u);
+            uint32_t presence_color = !present ? COLOR_GREY :
+                (state.presence_state == WIFEEL_PRESENCE_MOTION ? COLOR_S3 : COLOR_GREEN);
+            set_stat_color(s_stat_presence_icon, s_stat_presence_count, presence_color);
 
-            lv_chart_set_next_value(s_chart, s_chart_s1, state.motion_score_streams[WIFEEL_STREAM_ROUTER_TO_HUB]);
-            lv_chart_set_next_value(s_chart, s_chart_s3, state.motion_score_streams[WIFEEL_STREAM_DISPLAY_TO_HUB]);
+            lv_label_set_text_fmt(s_stat_motion_count, "%u", state.motion_score);
+            uint32_t motion_color = state.motion_flag ? COLOR_S3 : COLOR_GREEN;
+            set_stat_color(s_stat_motion_icon, s_stat_motion_count, motion_color);
+
+            lv_label_set_text(s_network_label, state.ssid[0] ? state.ssid : "(hub not connected)");
+            lv_label_set_text_fmt(s_link_label, "fw %s  \xc2\xb7  %uHz", state.fw_version, HUB_BROADCAST_HZ);
+
+            uint8_t s1_val = state.motion_score_streams[WIFEEL_STREAM_ROUTER_TO_HUB];
+            uint8_t s3_val = state.motion_score_streams[WIFEEL_STREAM_DISPLAY_TO_HUB];
+            lv_label_set_text_fmt(s_legend_s1, "S1 router %u", s1_val);
+            lv_label_set_text_fmt(s_legend_s3, "S3 display %u", s3_val);
+            lv_chart_set_next_value(s_chart, s_chart_s1, s1_val);
+            lv_chart_set_next_value(s_chart, s_chart_s3, s3_val);
         }
 
         bsp_amoled_lvgl_unlock();

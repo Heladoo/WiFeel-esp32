@@ -3,15 +3,13 @@
 #include <stdio.h>
 
 #define PHONES_MAX_ROWS 6
-#define RING_MAX_PHONES 5 /* gauge fills up by this count; more just shows full */
 
 /* Reuses the app's existing palette (see app_main.c's COLOR_S1/COLOR_S3)
  * so a vendor's dot reads as part of the same system rather than a new
  * ad-hoc color set. */
 #define COLOR_BG         0x101418
-#define COLOR_RING       0x4FA8E8 /* matches COLOR_S1 */
+#define COLOR_HEADLINE   0x4FA8E8 /* matches COLOR_S1 */
 #define COLOR_WIFI_TILE  0xE8A33D /* matches COLOR_S3 */
-#define COLOR_TRACK      0x2A3238 /* gauge background track */
 #define COLOR_MUTED      0x5A6B73 /* matches the Home title's muted color */
 #define COLOR_TEXT       0xE8EEF2
 #define COLOR_VENDOR_APPLE     0xE8EEF2
@@ -21,18 +19,20 @@
 #define COLOR_VENDOR_OTHER     0x5A6B73
 #define COLOR_VENDOR_UNKNOWN   0x3A4750
 
-static lv_obj_t *s_ring;
-static lv_obj_t *s_ring_icon;
-static lv_obj_t *s_ring_count;
+static lv_obj_t *s_headline_icon;
+static lv_obj_t *s_headline_count;
+static lv_obj_t *s_headline_caption;
 static lv_obj_t *s_wifi_icon;
 static lv_obj_t *s_wifi_count;
+static lv_obj_t *s_wifi_caption;
 static lv_obj_t *s_empty_label;
 
 typedef struct {
     lv_obj_t *row;
     lv_obj_t *source_icon;
+    lv_obj_t *type_icon;
     lv_obj_t *vendor_label;
-    lv_obj_t *distance_label;
+    lv_obj_t *range_label;
 } row_widgets_t;
 
 static row_widgets_t s_rows[PHONES_MAX_ROWS];
@@ -49,28 +49,68 @@ static uint32_t vendor_color(uint8_t vendor)
     }
 }
 
-/* Short label, not just a color — a bare colored dot needs a legend to
- * mean anything (reported live: "different color which i dont know
- * their meanings"). This is the row's one bit of real text, standing in
- * for a per-brand icon LVGL's built-in symbol set doesn't have. */
-static const char *vendor_abbrev(uint8_t vendor)
+/* Short label, not just a color — a bare colored dot needs a legend to mean
+ * anything (reported live: "different color which i dont know their
+ * meanings"). "Unknown" spelled out rather than "?" (reported live: "dont
+ * show '?' show Unknown or similar") — this is the classifier's honest
+ * answer when an advert/frame carried no manufacturer data we recognize,
+ * not an error. */
+static const char *vendor_label_text(uint8_t vendor)
 {
     switch ((wifeel_vendor_t)vendor) {
-        case WIFEEL_VENDOR_APPLE:     return "Appl";
-        case WIFEEL_VENDOR_SAMSUNG:   return "Sams";
-        case WIFEEL_VENDOR_GOOGLE:    return "Gogl";
+        case WIFEEL_VENDOR_APPLE:     return "Apple";
+        case WIFEEL_VENDOR_SAMSUNG:   return "Samsung";
+        case WIFEEL_VENDOR_GOOGLE:    return "Google";
         case WIFEEL_VENDOR_MICROSOFT: return "MSFT";
-        case WIFEEL_VENDOR_OTHER:     return "Othr";
-        default:                      return "?";
+        case WIFEEL_VENDOR_OTHER:     return "Other";
+        default:                      return "Unknown";
     }
 }
 
-static void set_tile_dimmed(bool dimmed)
+/* Which device-type glyph to draw. LVGL's built-in symbol set has no
+ * literal phone/PC icons, so this leans on the closest available meaning:
+ * a handset for "phone" (matches the headline stat's own icon), a keyboard
+ * for "computer" (Microsoft vendor entries are Windows PCs — Swift Pair
+ * BLE beacons today; Wi-Fi-sourced entries can't reach this case yet, see
+ * phone_like's doc comment in wifeel_proto.h), and a generic connector
+ * glyph for anything else — including every Wi-Fi-sourced entry today,
+ * since there's no Wi-Fi vendor/type classifier yet (wifi_sniff.c). */
+static const char *type_icon_symbol(uint8_t vendor, uint8_t phone_like)
+{
+    if (phone_like) {
+        return LV_SYMBOL_CALL;
+    }
+    if ((wifeel_vendor_t)vendor == WIFEEL_VENDOR_MICROSOFT) {
+        return LV_SYMBOL_KEYBOARD;
+    }
+    return LV_SYMBOL_USB;
+}
+
+/* Distance is only reliable to a rough zone even after calibration (log-
+ * distance path loss from a single RSSI sample is noisy) — showing a bare
+ * "0.0m" for anything closer than ~1m read as broken (reported live:
+ * "currently distance show 0 for all"), so the closest zone is spelled out
+ * instead of rounded to a misleadingly precise number. */
+static void range_text(char *out, size_t out_len, uint8_t distance_dm)
+{
+    if (distance_dm == 255) {
+        snprintf(out, out_len, "Unknown");
+    } else if (distance_dm < 10) {
+        snprintf(out, out_len, "<1m");
+    } else if (distance_dm < 30) {
+        snprintf(out, out_len, "%.1fm", (double)distance_dm / 10.0);
+    } else if (distance_dm < 60) {
+        snprintf(out, out_len, "3-6m");
+    } else {
+        snprintf(out, out_len, "6m+");
+    }
+}
+
+static void set_headline_dimmed(bool dimmed)
 {
     lv_opa_t opa = dimmed ? LV_OPA_40 : LV_OPA_COVER;
-    lv_obj_set_style_opa(s_ring, opa, LV_PART_MAIN);
-    lv_obj_set_style_opa(s_ring_icon, opa, LV_PART_MAIN);
-    lv_obj_set_style_opa(s_ring_count, opa, LV_PART_MAIN);
+    lv_obj_set_style_opa(s_headline_icon, opa, LV_PART_MAIN);
+    lv_obj_set_style_opa(s_headline_count, opa, LV_PART_MAIN);
     lv_obj_set_style_opa(s_wifi_icon, opa, LV_PART_MAIN);
     lv_obj_set_style_opa(s_wifi_count, opa, LV_PART_MAIN);
 }
@@ -80,68 +120,61 @@ void ui_phones_create(lv_obj_t *parent)
     lv_obj_set_style_bg_color(parent, lv_color_hex(COLOR_BG), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(parent, LV_OPA_COVER, LV_PART_MAIN);
 
-    /* Ring gauge: the headline "vitals" stat (BLE phones nearby), styled
-     * like a watch face complication rather than Home's plain filled
-     * circle — deliberately different so the two tiles don't look like
-     * the same screen. Fills up to RING_MAX_PHONES, then stays full. The
-     * phone icon inside doubles as the page's own identifier, so there's
-     * no separate header. */
-    s_ring = lv_arc_create(parent);
-    lv_obj_set_size(s_ring, 160, 160);
-    lv_obj_align(s_ring, LV_ALIGN_CENTER, 0, -95);
-    lv_arc_set_rotation(s_ring, 270);
-    lv_arc_set_bg_angles(s_ring, 0, 360);
-    lv_arc_set_range(s_ring, 0, RING_MAX_PHONES);
-    lv_arc_set_value(s_ring, 0);
-    lv_obj_remove_style(s_ring, NULL, LV_PART_KNOB);
-    lv_obj_clear_flag(s_ring, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_arc_width(s_ring, 12, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(s_ring, lv_color_hex(COLOR_TRACK), LV_PART_MAIN);
-    lv_obj_set_style_arc_width(s_ring, 12, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(s_ring, lv_color_hex(COLOR_RING), LV_PART_INDICATOR);
-    lv_obj_set_style_bg_opa(s_ring, LV_OPA_TRANSP, LV_PART_MAIN);
+    /* Headline: nearby *phones* only (ble_phone_count already excludes
+     * non-phone BLE devices — PCs, accessories, unclassified — on the hub
+     * side; see devices.c). Plain icon + number, no gauge: reported live,
+     * "phone indicator - no need for pi chart." */
+    s_headline_icon = lv_label_create(parent);
+    lv_label_set_text(s_headline_icon, LV_SYMBOL_CALL);
+    lv_obj_set_style_text_color(s_headline_icon, lv_color_hex(COLOR_HEADLINE), LV_PART_MAIN);
+    lv_obj_set_style_text_font(s_headline_icon, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_align(s_headline_icon, LV_ALIGN_CENTER, -46, -172);
 
-    s_ring_icon = lv_label_create(parent);
-    lv_label_set_text(s_ring_icon, LV_SYMBOL_CALL);
-    lv_obj_set_style_text_color(s_ring_icon, lv_color_hex(COLOR_RING), LV_PART_MAIN);
-    lv_obj_set_style_text_font(s_ring_icon, &lv_font_montserrat_20, LV_PART_MAIN);
-    lv_obj_align_to(s_ring_icon, s_ring, LV_ALIGN_CENTER, 0, -32);
+    s_headline_count = lv_label_create(parent);
+    lv_label_set_text(s_headline_count, "--");
+    lv_obj_set_style_text_color(s_headline_count, lv_color_hex(COLOR_TEXT), LV_PART_MAIN);
+    lv_obj_set_style_text_font(s_headline_count, &lv_font_montserrat_48, LV_PART_MAIN);
+    lv_obj_align(s_headline_count, LV_ALIGN_CENTER, 4, -180);
 
-    s_ring_count = lv_label_create(parent);
-    lv_label_set_text(s_ring_count, "--");
-    lv_obj_set_style_text_color(s_ring_count, lv_color_hex(COLOR_TEXT), LV_PART_MAIN);
-    lv_obj_set_style_text_font(s_ring_count, &lv_font_montserrat_48, LV_PART_MAIN);
-    lv_obj_align_to(s_ring_count, s_ring, LV_ALIGN_CENTER, 0, 8);
+    s_headline_caption = lv_label_create(parent);
+    lv_label_set_text(s_headline_caption, "nearby phones");
+    lv_obj_set_style_text_color(s_headline_caption, lv_color_hex(COLOR_MUTED), LV_PART_MAIN);
+    lv_obj_set_style_text_font(s_headline_caption, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_align(s_headline_caption, LV_ALIGN_CENTER, 0, -128);
 
-    /* Secondary stat: devices confirmed on the home Wi-Fi network — kept
-     * as its own number rather than added to the ring's count, since the
-     * two sources can't be correlated to the same physical device (see
-     * devices.h's privacy-boundary comment). */
+    /* Secondary stat: devices confirmed on the home Wi-Fi network — kept as
+     * its own number rather than added to the headline, since the two
+     * sources can't be correlated to the same physical device (see
+     * devices.h's privacy-boundary comment), and it isn't phone-filtered
+     * (any Wi-Fi client counts, not just phones). */
     s_wifi_icon = lv_label_create(parent);
     lv_label_set_text(s_wifi_icon, LV_SYMBOL_WIFI);
     lv_obj_set_style_text_color(s_wifi_icon, lv_color_hex(COLOR_WIFI_TILE), LV_PART_MAIN);
     lv_obj_set_style_text_font(s_wifi_icon, &lv_font_montserrat_20, LV_PART_MAIN);
-    lv_obj_align(s_wifi_icon, LV_ALIGN_CENTER, -18, 32);
+    lv_obj_align(s_wifi_icon, LV_ALIGN_CENTER, -30, -90);
 
     s_wifi_count = lv_label_create(parent);
     lv_label_set_text(s_wifi_count, "--");
     lv_obj_set_style_text_color(s_wifi_count, lv_color_hex(COLOR_TEXT), LV_PART_MAIN);
     lv_obj_set_style_text_font(s_wifi_count, &lv_font_montserrat_28, LV_PART_MAIN);
-    lv_obj_align(s_wifi_count, LV_ALIGN_CENTER, 18, 30);
+    lv_obj_align(s_wifi_count, LV_ALIGN_CENTER, 4, -92);
 
-    /* Nearest devices, closest first — each row: source (Bluetooth/Wi-Fi
-     * glyph), the vendor as a short colored label (a bare color dot isn't
-     * self-explanatory — no per-brand icon exists in LVGL's symbol set,
-     * so a short name is the closest thing to an icon here), and the
-     * distance (no icon conveys a continuous number, so this is real
-     * text too). */
-    static const int16_t row_y0 = 78;
-    static const int16_t row_h = 26;
+    s_wifi_caption = lv_label_create(parent);
+    lv_label_set_text(s_wifi_caption, "on Wi-Fi");
+    lv_obj_set_style_text_color(s_wifi_caption, lv_color_hex(COLOR_MUTED), LV_PART_MAIN);
+    lv_obj_set_style_text_font(s_wifi_caption, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_align(s_wifi_caption, LV_ALIGN_CENTER, 0, -58);
+
+    /* All tracked devices, closest first (see devices.c's distance-ranked
+     * sort) — each row: source glyph (which radio saw it), type glyph
+     * (phone/computer/other), vendor, and a range zone. */
+    static const int16_t row_y0 = -18;
+    static const int16_t row_h = 30;
     for (int i = 0; i < PHONES_MAX_ROWS; i++) {
         row_widgets_t *r = &s_rows[i];
         r->row = lv_obj_create(parent);
         lv_obj_remove_style_all(r->row);
-        lv_obj_set_size(r->row, 200, row_h);
+        lv_obj_set_size(r->row, 230, row_h);
         lv_obj_align(r->row, LV_ALIGN_CENTER, 0, row_y0 + i * row_h);
 
         r->source_icon = lv_label_create(r->row);
@@ -149,14 +182,18 @@ void ui_phones_create(lv_obj_t *parent)
         lv_obj_set_style_text_color(r->source_icon, lv_color_hex(COLOR_MUTED), LV_PART_MAIN);
         lv_obj_align(r->source_icon, LV_ALIGN_LEFT_MID, 0, 0);
 
+        r->type_icon = lv_label_create(r->row);
+        lv_obj_set_style_text_font(r->type_icon, &lv_font_montserrat_14, LV_PART_MAIN);
+        lv_obj_align(r->type_icon, LV_ALIGN_LEFT_MID, 20, 0);
+
         r->vendor_label = lv_label_create(r->row);
         lv_obj_set_style_text_font(r->vendor_label, &lv_font_montserrat_14, LV_PART_MAIN);
-        lv_obj_align(r->vendor_label, LV_ALIGN_LEFT_MID, 24, 0);
+        lv_obj_align(r->vendor_label, LV_ALIGN_LEFT_MID, 44, 0);
 
-        r->distance_label = lv_label_create(r->row);
-        lv_obj_set_style_text_font(r->distance_label, &lv_font_montserrat_14, LV_PART_MAIN);
-        lv_obj_set_style_text_color(r->distance_label, lv_color_hex(COLOR_TEXT), LV_PART_MAIN);
-        lv_obj_align(r->distance_label, LV_ALIGN_LEFT_MID, 90, 0);
+        r->range_label = lv_label_create(r->row);
+        lv_obj_set_style_text_font(r->range_label, &lv_font_montserrat_14, LV_PART_MAIN);
+        lv_obj_set_style_text_color(r->range_label, lv_color_hex(COLOR_TEXT), LV_PART_MAIN);
+        lv_obj_align(r->range_label, LV_ALIGN_LEFT_MID, 148, 0);
 
         lv_obj_add_flag(r->row, LV_OBJ_FLAG_HIDDEN);
     }
@@ -170,16 +207,15 @@ void ui_phones_create(lv_obj_t *parent)
 
 void ui_phones_update(bool have, const wifeel_msg_devices_t *devices, uint32_t age_ms)
 {
-    /* Same staleness convention as the Home tile (LINK_STALE_MS there) —
-     * a hub that's gone quiet shouldn't leave a confidently-lit ring on
+    /* Same staleness convention as the Home tile (LINK_STALE_MS there) — a
+     * hub that's gone quiet shouldn't leave a confidently-lit headline on
      * screen showing a number that's no longer true. */
     bool stale = !have || age_ms > 4000;
-    set_tile_dimmed(stale);
+    set_headline_dimmed(stale);
 
     if (!have) {
-        lv_label_set_text(s_ring_count, "--");
+        lv_label_set_text(s_headline_count, "--");
         lv_label_set_text(s_wifi_count, "--");
-        lv_arc_set_value(s_ring, 0);
         for (int i = 0; i < PHONES_MAX_ROWS; i++) {
             lv_obj_add_flag(s_rows[i].row, LV_OBJ_FLAG_HIDDEN);
         }
@@ -187,10 +223,8 @@ void ui_phones_update(bool have, const wifeel_msg_devices_t *devices, uint32_t a
         return;
     }
 
-    lv_label_set_text_fmt(s_ring_count, "%u", devices->ble_phone_count);
+    lv_label_set_text_fmt(s_headline_count, "%u", devices->ble_phone_count);
     lv_label_set_text_fmt(s_wifi_count, "%u", devices->wifi_client_count);
-    int32_t ring_val = devices->ble_phone_count > RING_MAX_PHONES ? RING_MAX_PHONES : devices->ble_phone_count;
-    lv_arc_set_value(s_ring, ring_val);
 
     uint8_t n = devices->n_entries > PHONES_MAX_ROWS ? PHONES_MAX_ROWS : devices->n_entries;
     for (uint8_t i = 0; i < n; i++) {
@@ -198,13 +232,18 @@ void ui_phones_update(bool have, const wifeel_msg_devices_t *devices, uint32_t a
         row_widgets_t *r = &s_rows[i];
 
         lv_label_set_text(r->source_icon, e->source == WIFEEL_DEV_SRC_WIFI ? LV_SYMBOL_WIFI : LV_SYMBOL_BLUETOOTH);
-        lv_label_set_text(r->vendor_label, vendor_abbrev(e->vendor));
+
+        const char *ticon = type_icon_symbol(e->vendor, e->phone_like);
+        lv_label_set_text(r->type_icon, ticon);
+        lv_obj_set_style_text_color(r->type_icon, lv_color_hex(vendor_color(e->vendor)), LV_PART_MAIN);
+
+        lv_label_set_text(r->vendor_label, vendor_label_text(e->vendor));
         lv_obj_set_style_text_color(r->vendor_label, lv_color_hex(vendor_color(e->vendor)), LV_PART_MAIN);
-        if (e->distance_dm == 255) {
-            lv_label_set_text(r->distance_label, "?");
-        } else {
-            lv_label_set_text_fmt(r->distance_label, "%.1fm", (double)e->distance_dm / 10.0);
-        }
+
+        char range[12];
+        range_text(range, sizeof(range), e->distance_dm);
+        lv_label_set_text(r->range_label, range);
+
         lv_obj_clear_flag(r->row, LV_OBJ_FLAG_HIDDEN);
     }
     for (uint8_t i = n; i < PHONES_MAX_ROWS; i++) {

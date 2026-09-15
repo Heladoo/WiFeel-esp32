@@ -609,6 +609,62 @@ so a selftest failure would mean the live path is broken too.
 CSI unaffected: S3 still ~100 pkt/s with BLE at 25% duty and Wi-Fi
 sniffing both running.
 
+## UI fine-tuning pass: Home + Phones tiles reworked from live feedback (2026-09-15)
+
+Second round of UI feedback, addressed directly (not deferred this time):
+
+- **Home tile**: the single big motion-circle+score was replaced with
+  three top "vitals" stat chips (phones nearby, presence, motion),
+  requested explicitly. Presence shows **0/1, not a headcount** —
+  `people_count` (P3) is still an explicit 0 placeholder in
+  `firmware/sense/main/link.c`, so the stat is derived from
+  `presence_state` (EMPTY vs PRESENT_STILL/MOTION) instead of showing a
+  fabricated number. The trend chart got grid lines
+  (`lv_chart_set_div_line_count`), axis labels (0/100 on Y, -26s/now on
+  X, anchored to the chart's own corners via `lv_obj_align_to` rather
+  than hand-placed screen coordinates), and each series' legend text now
+  doubles as its live current value ("S1 router 42"). The bottom status
+  line gained an explicit Hz figure and moved the network SSID down to
+  join it (was up near the title).
+- **Phones tile**: dropped the ring/arc gauge entirely ("no need for a
+  pie chart") — headline is now a plain icon+number, and it already only
+  counts phone-like BLE devices (`ble_phone_count` already excluded
+  PCs/accessories on the hub side; this wasn't actually a bug, just
+  needed the gauge removed). The device table gained a **type icon**
+  (phone/computer/other) alongside the existing source icon — required
+  adding a `phone_like` byte to `wifeel_msg_device_entry_t` on the wire
+  (8 -> 9 bytes/entry) since the hub already computed this
+  classification but never sent it. Vendor "?" and distance "?" both
+  became spelled-out text ("Unknown"). Distance changed from a raw
+  decimeter number to a range zone (<1m / X.Xm / 3-6m / 6m+ / Unknown) —
+  the raw number rounded to a misleading "0.0m" at close range.
+- **Real bug fixed**: `devices_get_summary()`'s "closest first" sort
+  ranked by raw RSSI, but BLE and Wi-Fi use different 1m references
+  (`ref_1m`), so a strong Wi-Fi RSSI and a strong BLE RSSI aren't the
+  same physical distance — mixed-source ordering wasn't actually
+  closest-first. Now ranks by the computed distance instead. Verified
+  live on real hardware: `phones` console output confirmed
+  distance-ascending order (0.8m, 1.1m, 12.0m, 14.5m, 15.9m, then
+  three "unknown") after the fix.
+- **Live finding, not a new bug**: the BLE 1m reference is currently
+  -29.0 dBm (from the 2026-09-15 `phones calib ble` test above) — much
+  stronger than a device actually held 1m away would typically read.
+  With that reference, anything not essentially touching the hub's
+  antenna computes as several meters away even sitting on the same
+  desk (seen live: two devices read 0.8m/1.1m, others read 12-16m or
+  "unknown"). The new range-zone display makes this less misleading
+  than a bare "0.0m" was, but the underlying calibration should be
+  redone with a phone actually held at 1m before distance/range numbers
+  are trusted.
+- No visual confirmation on the physical round screen yet — all
+  coordinates were computed by hand against the 466px circular bezel
+  (chord width = sqrt(233^2 - dy^2)) and against LVGL's own alignment
+  primitives (`lv_obj_align_to` cascading off the chart/icon objects),
+  then verified only via a clean build, successful flash, and a crash-
+  free boot log with live sensor data flowing — not by looking at the
+  screen. Follow up once someone has eyes on it.
+- Both firmwares build with no warnings and flash clean.
+
 ## Backlog (deferred while phone detection is built)
 
 Phone detection (BLE + Wi-Fi sniffing, hub only) was prioritized ahead
@@ -629,14 +685,16 @@ of these by the user on 2026-09-14:
 - **Still to validate**: S1 and S3 motion walk-bys (boards sit close on
   one desk, so both should react together), then presence, then the
   fusion policy. `MOTION_SCORE_DELTA_RANGE_S3` is still a placeholder.
-- **Phones UI fine-tuning** (explicit user request, 2026-09-15 —
-  deliberately deferred, not urgent): the Phones tile's first pass is
-  functionally correct (verified live: real counts arrive and render)
-  but layout/spacing/wording will likely want another pass once the
-  user has spent more time looking at it on the real screen — e.g.
-  whether 6 rows is the right amount, whether "Appl/Sams/Gogl/MSFT/Othr"
-  abbreviations read well at a glance, ring sizing/position balance now
-  that the header icon is gone.
+- **Redo BLE distance calibration** (`phones calib ble 30`, phone held
+  truly 1m from the hub) — the current -29.0 dBm reference is from an
+  earlier test and reads much stronger than a real 1m distance, making
+  the Phones tile's range zones read farther-than-reality for most
+  devices (see the 2026-09-15 UI pass section above).
+- **Visually confirm the reworked Home/Phones tiles on the physical
+  screen** — the 2026-09-15 UI pass was verified by build+flash+boot log
+  only (no camera/simulator available), not by looking at the round
+  AMOLED. Check for clipping/crowding, especially the Phones table's
+  outer rows and the Home tile's top stat-chip row.
 - **Display-side link watchdog fired a few times right after enabling
   BLE+Wi-Fi sniffing on the hub** (~8s apart, a few cycles, then
   settled) — plausible that the hub's now-busier radio (BLE scan +
@@ -646,8 +704,9 @@ of these by the user on 2026-09-14:
   watching if it recurs, not worth chasing on a single occurrence.
 
 ### Next session should start here
-1. **Phones UI fine-tuning pass** (see above) once the user has spent
-   time with the current build on the real screen.
+1. **Visually check the reworked Home/Phones tiles** on the physical
+   screen (see above) and redo BLE distance calibration with a phone
+   truly 1m away.
 2. **Ask about the "Amira_Guest" network**: is the hub meant to be on a
    guest network long-term, or would the main/home network avoid S1's
    no-ICMP-reply limitation (~2-5 pkt/s CSI, AP frames only)?
@@ -665,7 +724,9 @@ of these by the user on 2026-09-14:
 6. Phone detection follow-ups (not started): count phones that aren't
    Wi-Fi-connected via their probe requests; correlate a phone's BLE and
    Wi-Fi sightings by RSSI-over-time pattern; use the display board as a
-   second BLE scanner for better distance/position (all noted as
+   second BLE scanner for better distance/position; a Wi-Fi client
+   vendor/type classifier (OUI-based) so Wi-Fi-sourced table rows can
+   show something other than the generic device icon (all noted as
    follow-ups in the original plan, still low priority).
 
 ## Known per-unit quirks
