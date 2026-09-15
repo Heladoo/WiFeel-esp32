@@ -39,7 +39,6 @@ static lv_obj_t *s_empty_label;
 
 typedef struct {
     lv_obj_t *row;
-    lv_obj_t *source_icon;
     lv_obj_t *type_icon;
     lv_obj_t *vendor_label;
     lv_obj_t *range_label;
@@ -176,8 +175,10 @@ void ui_phones_create(lv_obj_t *parent)
     lv_obj_align(s_wifi_caption, LV_ALIGN_CENTER, 0, -58);
 
     /* All tracked devices, closest first (see devices.c's distance-ranked
-     * sort) — each row: source glyph (which radio saw it), type glyph
-     * (phone/computer/other), vendor, and a range zone. */
+     * sort) — each row: type glyph (phone/computer/other), vendor, and a
+     * range zone. The source glyph (BLE vs Wi-Fi) that used to sit before
+     * the type icon was dropped per live feedback: "too small to
+     * understand anyways." */
     static const int16_t row_y0 = -18;
     static const int16_t row_h = 30;
     for (int i = 0; i < PHONES_MAX_ROWS; i++) {
@@ -187,26 +188,18 @@ void ui_phones_create(lv_obj_t *parent)
         lv_obj_set_size(r->row, 230, row_h);
         lv_obj_align(r->row, LV_ALIGN_CENTER, 0, row_y0 + i * row_h);
 
-        /* Source and type icons are two different glyph shapes 26px apart
-         * (was 20px — a UX pass found that too close for a 14px font,
-         * where the two icons could visually merge into one mark). */
-        r->source_icon = lv_label_create(r->row);
-        lv_obj_set_style_text_font(r->source_icon, &lv_font_montserrat_14, LV_PART_MAIN);
-        lv_obj_set_style_text_color(r->source_icon, lv_color_hex(COLOR_MUTED), LV_PART_MAIN);
-        lv_obj_align(r->source_icon, LV_ALIGN_LEFT_MID, 0, 0);
-
         r->type_icon = lv_label_create(r->row);
         lv_obj_set_style_text_font(r->type_icon, &lv_font_montserrat_14, LV_PART_MAIN);
-        lv_obj_align(r->type_icon, LV_ALIGN_LEFT_MID, 26, 0);
+        lv_obj_align(r->type_icon, LV_ALIGN_LEFT_MID, 0, 0);
 
         r->vendor_label = lv_label_create(r->row);
         lv_obj_set_style_text_font(r->vendor_label, &lv_font_montserrat_14, LV_PART_MAIN);
-        lv_obj_align(r->vendor_label, LV_ALIGN_LEFT_MID, 50, 0);
+        lv_obj_align(r->vendor_label, LV_ALIGN_LEFT_MID, 24, 0);
 
         r->range_label = lv_label_create(r->row);
         lv_obj_set_style_text_font(r->range_label, &lv_font_montserrat_14, LV_PART_MAIN);
         lv_obj_set_style_text_color(r->range_label, lv_color_hex(COLOR_TEXT), LV_PART_MAIN);
-        lv_obj_align(r->range_label, LV_ALIGN_LEFT_MID, 154, 0);
+        lv_obj_align(r->range_label, LV_ALIGN_LEFT_MID, 128, 0);
 
         lv_obj_add_flag(r->row, LV_OBJ_FLAG_HIDDEN);
     }
@@ -243,8 +236,6 @@ void ui_phones_update(bool have, const wifeel_msg_devices_t *devices, uint32_t a
     for (uint8_t i = 0; i < n; i++) {
         const wifeel_msg_device_entry_t *e = &devices->entries[i];
         row_widgets_t *r = &s_rows[i];
-
-        lv_label_set_text(r->source_icon, e->source == WIFEEL_DEV_SRC_WIFI ? LV_SYMBOL_WIFI : LV_SYMBOL_BLUETOOTH);
 
         const char *ticon = type_icon_symbol(e->vendor, e->phone_like);
         lv_label_set_text(r->type_icon, ticon);

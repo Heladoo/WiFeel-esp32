@@ -23,6 +23,8 @@
 #define UI_UPDATE_INTERVAL_MS 333 /* matches the hub's ~3Hz broadcast rate */
 #define CHART_POINT_COUNT 80      /* ~26s of history at this update rate (user asked to double the original ~13s) */
 #define CHART_WINDOW_S ((CHART_POINT_COUNT * UI_UPDATE_INTERVAL_MS) / 1000)
+#define CHART_W 340
+#define CHART_H 170
 
 /* Mirrors firmware/sense/main/link.c's LINK_RATE_HZ — not a shared
  * constant (the two firmware images don't share main/ code, only
@@ -67,6 +69,9 @@ static lv_obj_t *s_legend_s3;
 static lv_obj_t *s_chart;
 static lv_chart_series_t *s_chart_s1;
 static lv_chart_series_t *s_chart_s3;
+static lv_obj_t *s_threshold_line;
+static lv_point_precise_t s_threshold_pts[2];
+static uint8_t s_threshold_drawn_at = 0xFF; /* last value drawn; redraw only when it changes */
 
 /** One "vitals" stat: icon above a number above a small caption, all
  *  vertically stacked off the icon so only the icon's own position needs
@@ -124,7 +129,7 @@ static void build_home_screen(lv_obj_t *home_tile)
      * amplitude values") and a live current-value per legend (reported
      * live) are added below. */
     s_chart = lv_chart_create(scr);
-    lv_obj_set_size(s_chart, 340, 170);
+    lv_obj_set_size(s_chart, CHART_W, CHART_H);
     lv_obj_align(s_chart, LV_ALIGN_CENTER, 0, 55);
     lv_chart_set_type(s_chart, LV_CHART_TYPE_LINE);
     lv_chart_set_range(s_chart, LV_CHART_AXIS_PRIMARY_Y, 0, 100);
@@ -136,6 +141,24 @@ static void build_home_screen(lv_obj_t *home_tile)
     lv_obj_set_style_size(s_chart, 0, 0, LV_PART_INDICATOR); /* hide per-point marker dots, keep the line */
     s_chart_s1 = lv_chart_add_series(s_chart, lv_color_hex(COLOR_S1), LV_CHART_AXIS_PRIMARY_Y);
     s_chart_s3 = lv_chart_add_series(s_chart, lv_color_hex(COLOR_S3), LV_CHART_AXIS_PRIMARY_Y);
+
+    /* Motion detection's ENTER threshold (firmware/sense/main/motion.c's
+     * MOTION_ENTER_SCORE, sent over STATE as motion_threshold so this
+     * never hardcodes a second copy) — a dashed grey line across the
+     * chart at that score. Only the enter threshold is drawn, not the
+     * (lower) hysteresis/exit one, per live feedback. Sized/positioned
+     * to exactly cover the chart's own box so its two points can be
+     * computed as a plain fraction of CHART_H — same 0-100-over-the-
+     * object's-full-height mapping the axis labels above already use. */
+    s_threshold_line = lv_line_create(scr);
+    lv_obj_set_size(s_threshold_line, CHART_W, CHART_H);
+    lv_obj_align_to(s_threshold_line, s_chart, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_set_style_line_color(s_threshold_line, lv_color_hex(COLOR_MUTED), LV_PART_MAIN);
+    lv_obj_set_style_line_width(s_threshold_line, 1, LV_PART_MAIN);
+    lv_obj_set_style_line_dash_width(s_threshold_line, 4, LV_PART_MAIN);
+    lv_obj_set_style_line_dash_gap(s_threshold_line, 4, LV_PART_MAIN);
+    lv_obj_set_style_line_rounded(s_threshold_line, false, LV_PART_MAIN);
+    lv_obj_add_flag(s_threshold_line, LV_OBJ_FLAG_HIDDEN); /* shown once a real threshold arrives */
 
     /* Axis labels, all four inset INSIDE the chart's own rectangle rather
      * than placed outside it (one corner each: TL/BL/BR, "0" nudged right
@@ -269,12 +292,14 @@ static void ui_update_task(void *arg)
             lv_label_set_text(s_stat_motion_count, "--");
             set_stat_color(s_stat_motion_icon, s_stat_motion_count, COLOR_GREY);
             lv_label_set_text(s_link_label, "waiting for hub...");
+            lv_obj_add_flag(s_threshold_line, LV_OBJ_FLAG_HIDDEN);
         } else if (age_ms > LINK_STALE_MS) {
             lv_label_set_text(s_stat_presence_count, "--");
             set_stat_color(s_stat_presence_icon, s_stat_presence_count, COLOR_GREY);
             lv_label_set_text(s_stat_motion_count, "--");
             set_stat_color(s_stat_motion_icon, s_stat_motion_count, COLOR_GREY);
             lv_label_set_text_fmt(s_link_label, "link lost (%" PRIu32 "s ago)", age_ms / 1000);
+            lv_obj_add_flag(s_threshold_line, LV_OBJ_FLAG_HIDDEN);
         } else {
             /* Presence: 0/1, not a real headcount — people_count (P3) isn't
              * built yet (see firmware/sense/main/link.c, which sends it as
@@ -293,6 +318,18 @@ static void ui_update_task(void *arg)
 
             lv_label_set_text(s_network_label, state.ssid[0] ? state.ssid : "(hub not connected)");
             lv_label_set_text_fmt(s_link_label, "fw %s  \xc2\xb7  %uHz", state.fw_version, HUB_BROADCAST_HZ);
+
+            if (state.motion_threshold != s_threshold_drawn_at) {
+                uint8_t t = state.motion_threshold > 100 ? 100 : state.motion_threshold;
+                int16_t y = (int16_t)(CHART_H - ((int32_t)CHART_H * t) / 100);
+                s_threshold_pts[0].x = 0;
+                s_threshold_pts[0].y = y;
+                s_threshold_pts[1].x = CHART_W;
+                s_threshold_pts[1].y = y;
+                lv_line_set_points(s_threshold_line, s_threshold_pts, 2);
+                s_threshold_drawn_at = state.motion_threshold;
+            }
+            lv_obj_clear_flag(s_threshold_line, LV_OBJ_FLAG_HIDDEN);
 
             uint8_t s1_val = state.motion_score_streams[WIFEEL_STREAM_ROUTER_TO_HUB];
             uint8_t s3_val = state.motion_score_streams[WIFEEL_STREAM_DISPLAY_TO_HUB];

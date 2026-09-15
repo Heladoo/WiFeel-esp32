@@ -421,6 +421,19 @@ uint32_t devices_calibrate_remaining_ms(void)
     return (uint32_t)(remain_us / 1000);
 }
 
+void devices_calibrate_reset(wifeel_dev_source_t source)
+{
+    float def = (source == WIFEEL_DEV_SRC_BLE) ? BLE_REF_1M_DEFAULT : WIFI_REF_1M_DEFAULT;
+    if (source == WIFEEL_DEV_SRC_BLE) {
+        s_ble_ref_1m = def;
+    } else {
+        s_wifi_ref_1m = def;
+    }
+    save_ref_1m(source, def);
+    ESP_LOGI(TAG, "%s calibration reset to default: 1m reference = %.1f dBm",
+              (source == WIFEEL_DEV_SRC_BLE) ? "BLE" : "Wi-Fi", (double)def);
+}
+
 float devices_get_ref_1m(wifeel_dev_source_t source)
 {
     return (source == WIFEEL_DEV_SRC_BLE) ? s_ble_ref_1m : s_wifi_ref_1m;

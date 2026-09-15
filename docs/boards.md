@@ -713,6 +713,50 @@ code-correctness review). Findings and what was done about them:
   - The Phones table's flat rectangular rows won't perfectly match the
     circular bezel's curve, most noticeably on the outer rows.
 
+## Second live feedback round: BLE recalibration, dropped source icon, motion threshold line (2026-09-15)
+
+- **Fixed the -29.0 dBm miscalibration** rather than just documenting it:
+  added `devices_calibrate_reset(source)` (`devices.c`) and a `phones
+  calib reset ble|wifi` console command, and ran it live. BLE 1m
+  reference is back to the documented default (-59.0 dBm). Re-ran
+  `phones` afterward:
+  ```
+  7cf9  Unknown    -32   0.1m
+  f11c  Microsoft  -34   0.1m
+  c54d  Google     -56   0.8m
+  1e0a  Unknown    -57   0.8m
+  fe59  Google     -57   0.9m
+  15fe  Other      -59   1.0m
+  f834  Other      -60   1.1m
+  f025  Samsung    -72   3.2m
+  ```
+  No more "unknown" entries. **But the Samsung phone (reported live as
+  "on the same desk, <1m") still reads 3.2m** — the default reference is
+  a reasonable *generic* 1m value, not this specific phone's. RSSI-based
+  distance from a single device's reading is inherently noisy (phone
+  case, orientation, that model's actual BLE TX power all shift it) —
+  this is exactly why the plan's own caveats call distance "only
+  reliable to a zone... after a 1m calibration," not a promise that the
+  generic default is accurate for every device. A real fix needs
+  `phones calib ble 30` run while *that specific phone* is the closest/
+  strongest BLE source in range (calibration always taken from whichever
+  tracked device has the strongest RSSI at the end of the window, not a
+  chosen one) — not done yet, left for the user to do physically.
+- **Removed the per-row source icon** (BLE vs Wi-Fi glyph) from the
+  Phones table — reported live: "too small to understand anyways." Rows
+  are now type icon + vendor + range only.
+- **Motion detection's threshold, drawn on the Home chart**: added
+  `motion_get_enter_threshold()` (`motion.c`, returns `MOTION_ENTER_SCORE`)
+  and a new `motion_threshold` byte on `WIFEEL_MSG_STATE`, so the display
+  never hardcodes a second copy of the constant — if `MOTION_ENTER_SCORE`
+  changes, the line moves with it automatically. Rendered as a dashed
+  grey `lv_line` across the chart at that score. Only the ENTER threshold
+  is shown, not the (lower) EXIT/hysteresis one, per live feedback.
+- Both firmwares rebuilt, reflashed, and verified live: clean boot logs
+  on both boards, hub's `phones` output confirmed the calibration reset
+  took effect, display's `devices rx` log kept arriving normally after
+  the protocol change (WIFEEL_MSG_STATE grew by one byte).
+
 ## Backlog (deferred while phone detection is built)
 
 Phone detection (BLE + Wi-Fi sniffing, hub only) was prioritized ahead
@@ -733,11 +777,14 @@ of these by the user on 2026-09-14:
 - **Still to validate**: S1 and S3 motion walk-bys (boards sit close on
   one desk, so both should react together), then presence, then the
   fusion policy. `MOTION_SCORE_DELTA_RANGE_S3` is still a placeholder.
-- **Redo BLE distance calibration** (`phones calib ble 30`, phone held
-  truly 1m from the hub) — the current -29.0 dBm reference is from an
-  earlier test and reads much stronger than a real 1m distance, making
-  the Phones tile's range zones read farther-than-reality for most
-  devices (see the 2026-09-15 UI pass section above).
+- **Redo BLE distance calibration for real** (`phones calib ble 30`,
+  the actual phone in question held truly 1m from the hub, nothing else
+  closer/stronger during the window). The bad -29.0 dBm reference is
+  already reset to the generic -59.0 dBm default (`phones calib reset
+  ble`, 2026-09-15), which fixed the "unknown" readings, but a generic
+  default still isn't THIS phone's real 1m RSSI — the Samsung phone read
+  3.2m post-reset despite being reported live as <1m away (see the
+  second live-feedback-round section above).
 - **Visually confirm the reworked Home/Phones tiles on the physical
   screen** — the 2026-09-15 UI pass was verified by build+flash+boot log
   only (no camera/simulator available), not by looking at the round

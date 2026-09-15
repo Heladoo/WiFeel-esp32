@@ -3,8 +3,8 @@
  * headline number (phones only) and a secondary Wi-Fi-clients number, both
  * plain icon+number stats (no gauge — see app_main.c's build_home_screen()
  * for the sibling Home tile's similar plain-number style), then a table of
- * every tracked device sorted closest-first: source glyph (BLE/Wi-Fi),
- * type glyph (phone/computer/other), vendor, and a range zone.
+ * every tracked device sorted closest-first: type glyph (phone/computer/
+ * other), vendor, and a range zone.
  */
 #pragma once
 

@@ -175,6 +175,11 @@ typedef struct {
 typedef struct {
     uint8_t  motion_flag;      /* bool */
     uint8_t  motion_score;     /* 0-100 */
+    uint8_t  motion_threshold; /* 0-100: the ENTER threshold motion_flag turns on at
+                                 * (firmware/sense/main/motion.c's MOTION_ENTER_SCORE) —
+                                 * sent so the display can plot it without hardcoding a
+                                 * second copy of the constant. The EXIT (hysteresis)
+                                 * threshold isn't sent; only the enter line is drawn. */
     uint8_t  presence_state;   /* wifeel_presence_state_t */
     uint8_t  people_count;     /* 0-3, 3 means "3+" */
     uint8_t  count_confidence; /* 0-100 */

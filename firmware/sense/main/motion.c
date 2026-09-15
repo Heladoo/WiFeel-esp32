@@ -123,6 +123,11 @@ bool motion_get_flag(void)
     return s_flag;
 }
 
+uint8_t motion_get_enter_threshold(void)
+{
+    return MOTION_ENTER_SCORE;
+}
+
 float motion_get_raw_jitter(void)
 {
     return s_s1.raw_jitter;

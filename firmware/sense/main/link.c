@@ -38,6 +38,7 @@ static void link_task(void *arg)
         /* --- Real (P1) --- */
         state.motion_flag = motion_get_flag() ? 1 : 0;
         state.motion_score = motion_get_score();
+        state.motion_threshold = motion_get_enter_threshold();
         state.motion_score_streams[WIFEEL_STREAM_ROUTER_TO_HUB] = motion_get_s1_score();
         state.motion_score_streams[WIFEEL_STREAM_DISPLAY_TO_HUB] = motion_get_s3_score();
 

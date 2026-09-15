@@ -244,8 +244,19 @@ static const char *dev_source_name(wifeel_dev_source_t s)
 static int phones_calib(int argc, char **argv)
 {
     if (argc < 3) {
-        printf("usage: phones calib ble|wifi <seconds>\n");
+        printf("usage: phones calib ble|wifi <seconds>  |  phones calib reset ble|wifi\n");
         return 1;
+    }
+    if (strcmp(argv[2], "reset") == 0) {
+        if (argc < 4 || (strcmp(argv[3], "ble") != 0 && strcmp(argv[3], "wifi") != 0)) {
+            printf("usage: phones calib reset ble|wifi\n");
+            return 1;
+        }
+        wifeel_dev_source_t reset_source = (strcmp(argv[3], "ble") == 0) ? WIFEEL_DEV_SRC_BLE : WIFEEL_DEV_SRC_WIFI;
+        devices_calibrate_reset(reset_source);
+        printf("%s distance reference reset to default: %.1f dBm\n",
+               dev_source_name(reset_source), (double)devices_get_ref_1m(reset_source));
+        return 0;
     }
     wifeel_dev_source_t source;
     if (strcmp(argv[2], "ble") == 0) {
@@ -253,7 +264,7 @@ static int phones_calib(int argc, char **argv)
     } else if (strcmp(argv[2], "wifi") == 0) {
         source = WIFEEL_DEV_SRC_WIFI;
     } else {
-        printf("usage: phones calib ble|wifi <seconds>\n");
+        printf("usage: phones calib ble|wifi <seconds>  |  phones calib reset ble|wifi\n");
         return 1;
     }
     uint32_t duration_s = (argc >= 4) ? (uint32_t)atoi(argv[3]) : 15;
@@ -625,8 +636,8 @@ esp_err_t console_start(void)
     const esp_console_cmd_t phones_cmd = {
         .command = "phones",
         .help = "Nearby phones: summary | raw <s> [min_rssi] | duty <0-100> | "
-                "calib ble|wifi <s> | selftest",
-        .hint = "[raw <s> [min_rssi] | duty <pct> | calib ble|wifi <s> | selftest]",
+                "calib ble|wifi <s> | calib reset ble|wifi | selftest",
+        .hint = "[raw <s> [min_rssi] | duty <pct> | calib ble|wifi <s> | calib reset ble|wifi | selftest]",
         .func = &cmd_phones,
     };
     ESP_ERROR_CHECK(esp_console_cmd_register(&phones_cmd));

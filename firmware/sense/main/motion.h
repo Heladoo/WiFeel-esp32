@@ -46,6 +46,11 @@ uint8_t motion_get_score(void);
  *  (lower) exit threshold. */
 bool motion_get_flag(void);
 
+/** The ENTER threshold (MOTION_ENTER_SCORE) motion_get_flag() turns true
+ *  at — exposed so link.c can send it to the display instead of the
+ *  display hardcoding a second copy of the constant. */
+uint8_t motion_get_enter_threshold(void);
+
 /** Per-stream scores (0-100, before fusion) — exposed for live tuning and
  *  to see which stream is actually driving a MOTION flag. */
 uint8_t motion_get_s1_score(void);

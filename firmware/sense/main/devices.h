@@ -66,6 +66,18 @@ esp_err_t devices_calibrate_start(wifeel_dev_source_t source, uint32_t duration_
 bool devices_calibrate_is_active(void);
 uint32_t devices_calibrate_remaining_ms(void);
 
+/**
+ * Discards a previous calibration and restores the documented default
+ * 1m reference for `source` (persisted to NVS, same as a normal
+ * calibration would). For undoing a bad calibration — e.g. one taken
+ * with the reference device essentially touching the antenna rather
+ * than genuinely 1m away, which reads as a much-too-strong RSSI and
+ * makes every real device at normal room distance compute as far
+ * beyond its actual range (seen live: BLE calibrated to -29dBm made a
+ * phone sitting <1m away read as "unknown").
+ */
+void devices_calibrate_reset(wifeel_dev_source_t source);
+
 /** Current 1m reference RSSI per source (dBm) and the shared path-loss
  *  exponent used for distance estimates — for `phones`/status display. */
 float devices_get_ref_1m(wifeel_dev_source_t source);
