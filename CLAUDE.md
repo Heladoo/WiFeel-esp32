@@ -1,8 +1,10 @@
 # CLAUDE.md
 
-Guidance for Claude Code sessions working in this repo. See also the approved
-project plan at the path recorded in `docs/boards.md`, and the
-`esp32-firmware-flashing` skill for generic ESP32 flashing help.
+This file provides guidance to Claude Code (claude.ai/code) when working with
+code in this repository.
+
+See also the approved project plan at the path recorded in `docs/boards.md`,
+and the `esp32-firmware-flashing` skill for generic ESP32 flashing help.
 
 ## What this project is
 
@@ -12,18 +14,58 @@ architecture, and milestone checklist live in the plan file this project was
 built from — check `docs/boards.md` for its path if it's not obvious, and
 otherwise ask the user rather than re-deriving the architecture from scratch.
 
+## Architecture
+
+- **Two independent firmware images**, not one shared build: `firmware/sense`
+  (the hub — does all CSI sensing and fusion) and `firmware/display` (LVGL UI,
+  plus a second CSI vantage point). They only share code via `components/` —
+  never a shared `main`, and `idf.py` is invoked separately for each with `-C`.
+- **`components/`** is the only place logic is shared between the two images:
+  - `wifeel_proto`: the ESP-NOW wire format. One `wifeel_msg_type_t` enum, one
+    tagged-union `wifeel_msg_payload_t`, `wifeel_proto_pack()`/`_unpack()` with
+    CRC-16 framing. Adding a message type = add the enum value + payload
+    struct + a union member; the union's size (and `WIFEEL_PROTO_MAX_LEN`)
+    follows the largest member automatically.
+  - `wifeel_csi`: the CSI ring buffer and feature extraction
+    (`wifeel_csi_stream_t`) — identical code path on both firmwares for
+    whichever stream(s) that board owns.
+- **CSI streams**: the plan's original design has 4 (S1-S4); only two exist
+  today. **S1** = router→hub, via the hub's own STA join (`wifi_mgr.c`).
+  **S3** = display→hub, via the hub's SoftAP that the display joins as a
+  station and pings continuously (see "Hub↔display link" below — active
+  traffic, not just association, is what makes CSI work here).
+- **Hub fusion pipeline** (`firmware/sense/main/`): `csi_mgr.c` feeds raw CSI
+  into `wifeel_csi` per stream → `motion.c` (P1) and `presence.c` (P2) each
+  read features from both streams and fuse independently → `devices.c` holds
+  a separate table of nearby BLE/Wi-Fi devices, fed by `ble_scan.c` (passive
+  NimBLE scan) and `wifi_sniff.c` (a second promiscuous Wi-Fi RX callback
+  alongside CSI's own) → `link.c` packages all of it into
+  `WIFEEL_MSG_STATE` (~3Hz) and `WIFEEL_MSG_DEVICES` (~1Hz) and broadcasts
+  both over ESP-NOW.
+- **Display side** (`firmware/display/main/`): `link.c` receives and caches
+  the latest STATE/DEVICES message (mutex-protected, most-recent-wins);
+  `app_main.c`'s `ui_update_task` polls both on a fixed interval and updates
+  an `lv_tileview` with two tiles — Home (`build_home_screen()`) and Phones
+  (`ui_phones.c`).
+- **Reliability watchdogs**: `ping_gw.c` on both boards normally relies on
+  `WIFI_EVENT_STA_DISCONNECTED` to detect a dead link, which has been
+  observed live to not fire even when the link is truly dead. Both
+  `firmware/sense/main/app_main.c` (S1) and `firmware/display/main/link.c`
+  (S3) run a small watchdog task that force-reconnects after a stall — but
+  only once a first successful reply has been seen, since a network that
+  never answers ICMP at all must not be mistaken for "stalled" (see
+  docs/boards.md's "Correction: the ~8s reconnect cycle was our own
+  watchdog" section for why this distinction exists).
+
 ## Current status (see docs/boards.md for full detail)
 
 - Both boards identified, flashed, and running custom firmware (HUB-1 =
   XIAO C6, DISP-1 = Waveshare AMOLED).
-- Hub senses two independent CSI streams: **S1** (router→hub, via
-  `wifi_mgr_join()`) and **S3** (display→hub, via the hub's own SoftAP —
-  see "Hub↔display link" below). `motion.c` fuses both into one score.
-  P1 (motion) is live-tested and working; P2-P5 (presence, count,
-  breathing, position) are not built yet.
-- Display renders a live home screen (LVGL) fed by the hub's ESP-NOW
-  STATE broadcasts: a motion indicator, fused score, and a 2-series trend
-  chart of S1 vs S3 scores.
+- P1 (motion, fusing S1+S3 in `motion.c`) is live-tested and working;
+  P3-P5 (people count, breathing, rough position) are not built yet.
+- Display's Home tile shows three top stats (nearby phones, presence,
+  motion) plus a gridded 2-series trend chart of S1 vs S3 scores with
+  live current-value legends.
 - P2 (presence) code is written (`presence.c`/`.h`) and verified correct
   in a clean test, but its wander thresholds are still unvalidated
   placeholders.
@@ -33,28 +75,26 @@ otherwise ask the user rather than re-deriving the architecture from scratch.
   new tool. (An earlier "DTR/RTS refuted" conclusion was wrong; see
   docs/boards.md.) Also: `run_in_background` Bash calls on this machine
   launch duplicate Python processes — never use it for serial.
-- **Fixed**: both boards' `ping_gw.c` could get stuck retrying a dead
-  ping forever without `WIFI_EVENT_STA_DISCONNECTED` ever firing. Both
-  now run a watchdog task that force-reconnects after a 5s stall. One
-  occurrence traced precisely: the hub's own S1 ping got stuck, starving
-  it enough to fail the SoftAP's WPA2 handshake with the display
-  (reason code 15) — breaking S3 too without the hub ever crashing.
-- The ~8s router reconnect cycle seen after adding the watchdog was the
-  watchdog itself: "Amira_Guest"'s gateway never answers ICMP, so every
-  connection looked stalled. Fixed — the hub watchdog now arms only after
-  a first reply. Side effect of no replies: S1 CSI is only ~2-5 pkt/s.
+- The watchdogs described under Architecture are fixes for a real incident:
+  a stuck S1 ping once starved the hub enough to fail the SoftAP's WPA2
+  handshake with the display (802.11 reason code 15) — breaking S3 too
+  without the hub ever crashing. Side effect on the current test network:
+  it doesn't answer ICMP at all, so S1 CSI is only ~2-5 pkt/s (AP frames
+  only, no ping replies).
 - **Nearby phone detection built end to end**: BLE scanning + Wi-Fi
   client sniffing on the hub (`devices.c`, `ble_scan.c`, `wifi_sniff.c`),
   broadcast to the display (`WIFEEL_MSG_DEVICES`, ~1Hz), rendered on a
-  new swipeable Phones tile (`ui_phones.c`) — smartwatch-vitals style:
-  ring gauge (phone icon + BLE count) + Wi-Fi-connected count + a
-  nearest-devices list (source icon, vendor name/color, distance).
-  Verified live end to end (receive-side log confirmed real counts
-  arriving). Vendor classifier (Apple/Samsung/Google/Microsoft) checked
-  against 4 real nearby devices with sourced Bluetooth SIG data — see
-  docs/boards.md. UI fine-tuning is an explicit, deliberately deferred
-  follow-up (see docs/boards.md's Backlog) — not a bug, just not
-  polished yet.
+  swipeable Phones tile (`ui_phones.c`) — smartwatch-vitals style: a
+  plain phones-nearby headline number (no gauge), a Wi-Fi-connected
+  count, and a nearest-first device table (source icon, phone/computer/
+  other type icon, vendor, range zone). Entries are ranked by computed
+  distance, not raw RSSI (BLE and Wi-Fi have different 1m references).
+  Verified live end to end. Vendor classifier (Apple/Samsung/Google/
+  Microsoft) checked against 4 real nearby devices with sourced
+  Bluetooth SIG data — see docs/boards.md. Not yet visually confirmed on
+  the physical round screen (no camera/simulator available); the BLE
+  distance calibration also needs redoing with a phone truly 1m away —
+  see docs/boards.md's Backlog.
 
 ## Hub↔display link (the "second sensing node")
 
@@ -114,6 +154,34 @@ non-interactively, per the esp32-firmware-flashing skill's verification step.
 Before the **first** WiFeel flash on any board (or after it ran different
 firmware), erase flash first: `idf.py -C firmware/sense -p COMx erase-flash`.
 
+## Verification
+
+There's no build-time test suite — verification is on-device, over the
+hub's interactive `esp_console` REPL (`firmware/sense/main/console_cmds.c`):
+
+```
+status                  # link, CSI packet rates/RSSI, motion+presence state, free heap
+phones                  # nearby-device summary table (BLE + Wi-Fi)
+phones selftest         # runs the BLE/Wi-Fi classifiers against known-good captured
+                         # byte samples on-device — closest thing to a regression test
+motion [seconds]        # streams live motion score/jitter, for walk-by tuning
+```
+
+Drive the console non-interactively from `tools/` (only `pyserial` is
+actually required; `requirements.txt` also lists packages for training
+tooling from the original plan that was never built):
+
+```bash
+python tools/send_cmd.py COMx status          # one command, capture the reply
+python tools/serial_log.py COMx --seconds 20  # boot log / free-running capture
+python tools/status_poll.py COMx --minutes 5  # S1/S3 pkt-rate + heap over time, one connection
+```
+
+Never open the hub's serial port with a plain terminal or a fresh
+`serial.Serial(...)` call — see "Opening/closing the serial port..." below.
+Always go through `tools/serial_util.py`'s `open_port()` (all scripts above
+already do).
+
 ## Board identification
 
 Always confirm which physical board is on which COM port before flashing —
@@ -158,10 +226,6 @@ gpio_set_level(GPIO_NUM_14, 1);
 
 ## Conventions
 
-- Shared code between the two firmware projects goes in `components/`
-  (`wifeel_proto` for the ESP-NOW wire format, `wifeel_csi` for CSI capture
-  and feature extraction) — never duplicate this logic between
-  `firmware/sense` and `firmware/display`.
 - Raw CSI data never crosses the ESP-NOW link — only extracted features and
   results. Keep it that way; it's both a bandwidth and a privacy boundary.
 - Every firmware prints a boot banner with a version string, target, and (hub
