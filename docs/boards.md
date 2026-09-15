@@ -629,23 +629,44 @@ of these by the user on 2026-09-14:
 - **Still to validate**: S1 and S3 motion walk-bys (boards sit close on
   one desk, so both should react together), then presence, then the
   fusion policy. `MOTION_SCORE_DELTA_RANGE_S3` is still a placeholder.
+- **Phones UI fine-tuning** (explicit user request, 2026-09-15 —
+  deliberately deferred, not urgent): the Phones tile's first pass is
+  functionally correct (verified live: real counts arrive and render)
+  but layout/spacing/wording will likely want another pass once the
+  user has spent more time looking at it on the real screen — e.g.
+  whether 6 rows is the right amount, whether "Appl/Sams/Gogl/MSFT/Othr"
+  abbreviations read well at a glance, ring sizing/position balance now
+  that the header icon is gone.
+- **Display-side link watchdog fired a few times right after enabling
+  BLE+Wi-Fi sniffing on the hub** (~8s apart, a few cycles, then
+  settled) — plausible that the hub's now-busier radio (BLE scan +
+  promiscuous Wi-Fi sniff + CSI + SoftAP + STA, all one radio) causes
+  brief SoftAP responsiveness dips under load. Self-recovers, S3 stayed
+  ~90-100 pkt/s afterward, not confirmed as an ongoing problem — worth
+  watching if it recurs, not worth chasing on a single occurrence.
 
 ### Next session should start here
-1. **Ask about the "Amira_Guest" network**: is the hub meant to be on a
-   guest network long-term, or would the main/home network avoid the
-   ~6-8s reconnect cycle? This is likely the actual remaining reliability
-   issue, now that both boards recover from it instead of hanging.
-2. Once the link (however it ends up configured) is stable for a
-   sustained period, redo the S3-focused walk-by test cleanly and set a
-   real `MOTION_SCORE_DELTA_RANGE_S3` (still an unvalidated placeholder
-   equal to S1's value) — per-channel validation before any fusion
-   policy changes (explicit user instruction).
-3. Redo empty-room presence calibration and validate
+1. **Phones UI fine-tuning pass** (see above) once the user has spent
+   time with the current build on the real screen.
+2. **Ask about the "Amira_Guest" network**: is the hub meant to be on a
+   guest network long-term, or would the main/home network avoid S1's
+   no-ICMP-reply limitation (~2-5 pkt/s CSI, AP frames only)?
+3. Once the link is stable for a sustained period, redo the S3-focused
+   walk-by test cleanly and set a real `MOTION_SCORE_DELTA_RANGE_S3`
+   (still an unvalidated placeholder equal to S1's value) — per-channel
+   validation before any fusion policy changes (explicit user
+   instruction).
+4. Redo empty-room presence calibration and validate
    `PRESENCE_WANDER_THRESHOLD_S1`/`_S3` (still placeholders) against a
    real "person sitting still nearby" test, one stream at a time.
-4. Only after S1 and S3 are independently validated for both motion and
+5. Only after S1 and S3 are independently validated for both motion and
    presence: revisit the S1-alone-triggers-MOTION fusion policy question
    from the original baseline.
+6. Phone detection follow-ups (not started): count phones that aren't
+   Wi-Fi-connected via their probe requests; correlate a phone's BLE and
+   Wi-Fi sightings by RSSI-over-time pattern; use the display board as a
+   second BLE scanner for better distance/position (all noted as
+   follow-ups in the original plan, still low priority).
 
 ## Known per-unit quirks
 

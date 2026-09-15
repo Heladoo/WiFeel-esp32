@@ -43,10 +43,18 @@ otherwise ask the user rather than re-deriving the architecture from scratch.
   watchdog itself: "Amira_Guest"'s gateway never answers ICMP, so every
   connection looked stalled. Fixed — the hub watchdog now arms only after
   a first reply. Side effect of no replies: S1 CSI is only ~2-5 pkt/s.
-- **In progress**: nearby phone detection (BLE + Wi-Fi sniffing on the
-  hub, Phones page on the display) — see the "CURRENT CHANGE" section of
-  the plan file named in docs/boards.md. Deferred items are listed in
-  docs/boards.md's "Backlog" section.
+- **Nearby phone detection built end to end**: BLE scanning + Wi-Fi
+  client sniffing on the hub (`devices.c`, `ble_scan.c`, `wifi_sniff.c`),
+  broadcast to the display (`WIFEEL_MSG_DEVICES`, ~1Hz), rendered on a
+  new swipeable Phones tile (`ui_phones.c`) — smartwatch-vitals style:
+  ring gauge (phone icon + BLE count) + Wi-Fi-connected count + a
+  nearest-devices list (source icon, vendor name/color, distance).
+  Verified live end to end (receive-side log confirmed real counts
+  arriving). Vendor classifier (Apple/Samsung/Google/Microsoft) checked
+  against 4 real nearby devices with sourced Bluetooth SIG data — see
+  docs/boards.md. UI fine-tuning is an explicit, deliberately deferred
+  follow-up (see docs/boards.md's Backlog) — not a bug, just not
+  polished yet.
 
 ## Hub↔display link (the "second sensing node")
 
