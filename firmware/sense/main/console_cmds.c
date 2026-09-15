@@ -26,6 +26,7 @@
 #include "devices.h"
 #include "wifi_sniff.h"
 #include "esp_timer.h"
+#include "web_status.h"
 
 static const char *TAG = "console";
 
@@ -517,6 +518,18 @@ static const char *presence_state_name(wifeel_presence_state_t s)
     }
 }
 
+static int cmd_web(int argc, char **argv)
+{
+    if (argc >= 2 && strcmp(argv[1], "selftest") == 0) {
+        printf("GET-ing the dashboard from the hub's own IP (see the boot/this log for the result — "
+               "esp_http_client logs at INFO)...\n");
+        esp_err_t err = web_status_selftest();
+        return err == ESP_OK ? 0 : 1;
+    }
+    printf("usage: web selftest\n");
+    return 1;
+}
+
 static int cmd_status(int argc, char **argv)
 {
     (void)argc;
@@ -675,6 +688,15 @@ esp_err_t console_start(void)
         .func = &cmd_phones,
     };
     ESP_ERROR_CHECK(esp_console_cmd_register(&phones_cmd));
+
+    const esp_console_cmd_t web_cmd = {
+        .command = "web",
+        .help = "Web dashboard diagnostics: selftest (GET the dashboard from the hub's own IP, "
+                "to tell a server bug apart from a network/router problem)",
+        .hint = "selftest",
+        .func = &cmd_web,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&web_cmd));
 
     return esp_console_start_repl(repl);
 }

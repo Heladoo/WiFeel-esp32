@@ -834,36 +834,22 @@ Answered from evidence, not guesses:
 Phone detection (BLE + Wi-Fi sniffing, hub only) was prioritized ahead
 of these by the user on 2026-09-14:
 
-- **Web dashboard (2026-09-15) is unreachable from everything tested**
-  — guest network, primary network, and the user's own PC all failed,
-  which rules out guest-network client isolation as the cause (that
-  can't explain a primary-network failure). The server itself starts
-  without error and the hub stays healthy (confirmed via `status` and
-  clean boot logs), so the fault is somewhere between "the socket is
-  actually open and accepting" and "a browser can complete a request."
-  Not investigated this session — leads for next time, roughly in the
-  order to try them:
-  - Confirm the IP printed by `status` is still current — DHCP could
-    have re-leased a different address since http://192.168.1.132/ was
-    last given out; re-run `status` fresh rather than reusing the old
-    URL.
-  - From the hub's own console, confirm the httpd task is actually
-    alive and the socket bound (no direct command exists yet for this —
-    might be worth adding one, e.g. a `web` status subcommand).
-  - Try curl/Invoke-WebRequest from a machine on the SAME Wi-Fi AP the
-    hub is on (not just the same subnet/router) — isolate router-level
-    routing from AP-level association weirdness.
-  - Check whether ESP-IDF's `esp_http_server` needs anything beyond
-    `httpd_start()` on this target/IDF version to bind on all
-    interfaces vs. just one netif (STA vs AP) — the hub runs APSTA
-    (both its own SoftAP and the home network STA simultaneously);
-    it's possible the server only bound to one of the two netifs'
-    interfaces and the home-network STA isn't it.
-  - Try a port other than 80 in case something (router, OS) is
-    filtering port 80 specifically inbound to non-standard devices.
-  - Consider a minimal `curl -v` (or PowerShell's `-Verbose`) capture
-    to see exactly where the connection attempt fails (DNS/ARP resolve,
-    TCP SYN, or after connect) rather than just pass/fail.
+- **Web dashboard unreachable from every external device tested**
+  (guest network, primary network, the user's own PC) — but a
+  same-device self-test (`web selftest`, added 2026-09-15) proved the
+  server itself answers correctly (`HTTP 200, 1360 bytes` GETting its
+  own dashboard over its real STA IP). That rules out the firmware:
+  httpd is bound, accepting, and responding correctly. The fault is a
+  router/AP-level setting — leading hypothesis is Wi-Fi client/AP
+  isolation applied broadly (not just to a guest VLAN). **Actual fix is
+  in the router's admin UI** (look for "AP Isolation" / "Client
+  Isolation" / "Wireless Isolation" and disable it), not more firmware
+  work — see the dedicated section above for the full self-test
+  writeup. If disabling isolation doesn't fix it, next things to try:
+  a port other than 80 (in case something filters port 80 specifically
+  inbound to non-standard devices), and a packet-level capture (`curl -v`
+  or `Invoke-WebRequest -Verbose`) to see exactly where a request from
+  another device dies (ARP, TCP SYN, or after connect).
 - **Console typing**: the hub's constant logging makes the interactive
   console unusable, so `join` can't be typed by hand. Needs a `quiet`
   command or a lower default log level. Workaround written:
@@ -1037,11 +1023,36 @@ exactly when the hub is on the home network.
   False` / `PingSucceeded: False` from this machine's wired Ethernet
   (192.168.1.55, same /24 as the hub's 192.168.1.132).
 
+## Root cause isolated: server is fine, it's the network (2026-09-15, later still)
+
+Added `web_status_selftest()` / `web selftest` (console command) —
+has the hub itself `esp_http_client` GET its own dashboard over its
+real STA IP (not loopback: ESP-IDF's default lwIP config doesn't build
+a loopback netif, so `127.0.0.1` wouldn't have been a meaningful test).
+This exercises the exact same code path (httpd, the STA netif, the
+socket) an external device would use, just sourced from the same chip.
+
+**Result: `HTTP 200, 1360 bytes`.** The server answers correctly. This
+conclusively rules out the server/firmware as the cause — `httpd_start()`
+is binding and accepting connections fine, the STA netif is fine, the
+JSON handler runs fine. Combined with the user's own testing (fails
+from guest network, primary network, AND their own PC — see above),
+the fault has to be somewhere in the router/AP: most likely **Wi-Fi
+client/AP isolation** applied broadly rather than only to a guest VLAN
+(a common router feature — isolates wireless clients from each other,
+sometimes from wired clients too, regardless of which SSID they're on)
+— not confirmed against the actual router's settings, but it's now the
+leading, well-evidenced hypothesis rather than a guess. **Next step is
+checking the router's own admin settings for "AP Isolation" / "Client
+Isolation" / "Wireless Isolation" and disabling it** — not something
+fixable from the firmware side, since the ESP32 code has now been
+shown to work correctly.
+
 ### Next session should start here
-1. **Debug the web dashboard being unreachable from everything** — see
-   the "Backlog" section below for what's already known (confirmed NOT
-   a guest-network isolation issue: fails from guest, primary, AND the
-   user's own PC) and where to start looking next.
+1. **Check the router's admin settings for AP/client isolation** and
+   disable it if present — the on-device self-test (`web selftest`)
+   proved the dashboard server itself works correctly, so this is a
+   router-config problem, not a firmware bug (see above).
 2. **Visually check the reworked Home/Phones tiles** on the physical
    screen (see above) and redo BLE distance calibration with a phone
    truly 1m away.

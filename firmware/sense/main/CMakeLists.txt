@@ -26,6 +26,7 @@ idf_component_register(
         "esp_timer"
         "bt"
         "esp_http_server"
+        "esp_http_client"
         "wifeel_proto"
         "wifeel_csi"
 )

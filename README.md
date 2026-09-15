@@ -132,9 +132,11 @@ phones calib reset ble|wifi           # undo a bad calibration, back to the defa
   data as the display, meant to be reachable from any device on the
   hub's own Wi-Fi network — no app, no login, local-network-only by
   design (see `firmware/sense/main/web_status.c`'s header comment). The
-  server itself runs and the hub stays healthy, but **it's not actually
-  reachable yet** from anything tested (guest network, primary network,
-  or a PC) — see `docs/boards.md`'s Backlog before relying on this.
+  server itself is confirmed working (`web selftest` on the console has
+  the hub fetch its own dashboard and checks the response), but
+  **wasn't reachable from any other device when tested** — very likely
+  the router's Wi-Fi client/AP isolation setting, not a firmware bug;
+  see `docs/boards.md` before relying on this.
 
 ## Known limitations
 

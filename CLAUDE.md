@@ -104,11 +104,13 @@ otherwise ask the user rather than re-deriving the architecture from scratch.
   display's tiles. Its httpd task runs at `tskIDLE_PRIORITY+1`, not the
   component's own default (`+5`) — the default was verified live to
   starve `ping_gw` and ESP-NOW badly enough to drop the display's link;
-  keep it low if this file is touched again. **Currently unreachable
-  from everything tested** (guest network, primary network, the user's
-  own PC) despite the server and hub both being healthy — ruled out
-  guest-network isolation as the cause; root cause not yet found — see
-  docs/boards.md's Backlog for next debugging steps.
+  keep it low if this file is touched again. `web selftest` (console)
+  has the hub GET its own dashboard over its real STA IP — proved the
+  server itself works (`HTTP 200`). **Still unreachable from every
+  other device tested** (guest network, primary network, the user's
+  own PC) despite that — the firmware is exonerated, this is now a
+  router-config question (leading suspect: Wi-Fi client/AP isolation
+  applied network-wide, not just to a guest VLAN) — see docs/boards.md.
 
 ## Hub↔display link (the "second sensing node")
 

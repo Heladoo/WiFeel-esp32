@@ -24,6 +24,14 @@ extern "C" {
  *  already up. */
 esp_err_t web_status_init(void);
 
+/** Diagnostic: has the hub make an HTTP GET to its own dashboard, over
+ *  its actual STA IP (not loopback — ESP-IDF's default lwIP config
+ *  doesn't build in a loopback netif, so 127.0.0.1 isn't a meaningful
+ *  test here). Isolates "is the server itself broken" from "something
+ *  on the network/router is blocking other devices from reaching it" —
+ *  see the `web selftest` console command. */
+esp_err_t web_status_selftest(void);
+
 #ifdef __cplusplus
 }
 #endif

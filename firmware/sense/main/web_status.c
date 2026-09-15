@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <inttypes.h>
 #include "esp_http_server.h"
+#include "esp_http_client.h"
+#include "esp_wifi.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_log.h"
@@ -296,4 +298,42 @@ esp_err_t web_status_init(void)
 
     ESP_LOGI(TAG, "status dashboard started (reachable once the hub has an IP on your home Wi-Fi)");
     return ESP_OK;
+}
+
+esp_err_t web_status_selftest(void)
+{
+    esp_ip4_addr_t ip = {0};
+    if (wifi_mgr_get_ip(&ip) != ESP_OK) {
+        ESP_LOGW(TAG, "selftest: not connected, no IP to test against");
+        return ESP_ERR_WIFI_NOT_CONNECT;
+    }
+
+    char url[40];
+    snprintf(url, sizeof(url), "http://" IPSTR "/api/status", IP2STR(&ip));
+
+    esp_http_client_config_t config = {
+        .url = url,
+        .timeout_ms = 3000,
+        .method = HTTP_METHOD_GET,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (!client) {
+        ESP_LOGE(TAG, "selftest: esp_http_client_init failed");
+        return ESP_FAIL;
+    }
+
+    esp_err_t err = esp_http_client_perform(client);
+    if (err == ESP_OK) {
+        int status = esp_http_client_get_status_code(client);
+        int64_t len = esp_http_client_get_content_length(client);
+        ESP_LOGI(TAG, "selftest: GET %s -> HTTP %d, %" PRId64 " bytes — the server itself is reachable "
+                 "from the hub's own STA IP; if other devices still can't reach it, look at the "
+                 "router/AP (isolation, IoT-device fencing) rather than this code", url, status, len);
+    } else {
+        ESP_LOGE(TAG, "selftest: GET %s failed: %s — the server isn't actually answering even from "
+                 "the hub's own IP; the bug is here (binding/netif/task), not the network", url,
+                 esp_err_to_name(err));
+    }
+    esp_http_client_cleanup(client);
+    return err;
 }
