@@ -86,15 +86,26 @@ otherwise ask the user rather than re-deriving the architecture from scratch.
   broadcast to the display (`WIFEEL_MSG_DEVICES`, ~1Hz), rendered on a
   swipeable Phones tile (`ui_phones.c`) — smartwatch-vitals style: a
   plain phones-nearby headline number (no gauge), a Wi-Fi-connected
-  count, and a nearest-first device table (source icon, phone/computer/
-  other type icon, vendor, range zone). Entries are ranked by computed
-  distance, not raw RSSI (BLE and Wi-Fi have different 1m references).
-  Verified live end to end. Vendor classifier (Apple/Samsung/Google/
-  Microsoft) checked against 4 real nearby devices with sourced
-  Bluetooth SIG data — see docs/boards.md. Not yet visually confirmed on
-  the physical round screen (no camera/simulator available); the BLE
-  distance calibration also needs redoing with a phone truly 1m away —
-  see docs/boards.md's Backlog.
+  count, and a nearest-first device table (type icon, vendor, range
+  zone). Entries are ranked by computed distance, not raw RSSI (BLE and
+  Wi-Fi have different 1m references). Verified live end to end. Vendor
+  classifier (Apple/Samsung/Google/Microsoft) checked against real
+  nearby devices with sourced Bluetooth SIG data and live raw captures
+  — see docs/boards.md. `phones calib ble|wifi <s> [vendor]` restricts
+  calibration to one vendor (needed live — an unfiltered calibration on
+  a desk with several BLE sources locked onto the wrong device once);
+  `phones calib reset ble|wifi` undoes a bad calibration. Not yet
+  visually confirmed on the physical round screen (no camera/simulator
+  available).
+- **Web status dashboard**: the hub serves a read-only status page
+  (`web_status.c`, `esp_http_server`) at `http://<hub IP>/` — same live
+  data as the display's tiles, reachable from any device on the hub's
+  own Wi-Fi (local-network-only by design, no auth/TLS). Its httpd task
+  runs at `tskIDLE_PRIORITY+1`, not the component's own default
+  (`+5`) — the default was verified live to starve `ping_gw` and
+  ESP-NOW badly enough to drop the display's link; keep it low if this
+  file is touched again. Reachability from an actual phone/PC on the
+  hub's network isn't confirmed yet — see docs/boards.md.
 
 ## Hub↔display link (the "second sensing node")
 

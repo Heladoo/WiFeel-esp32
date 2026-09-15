@@ -231,6 +231,20 @@ esp_err_t wifi_mgr_get_gateway_ip(esp_ip4_addr_t *gw_out)
     return ESP_OK;
 }
 
+esp_err_t wifi_mgr_get_ip(esp_ip4_addr_t *ip_out)
+{
+    if (!s_connected || !s_sta_netif) {
+        return ESP_ERR_WIFI_NOT_CONNECT;
+    }
+    esp_netif_ip_info_t ip_info;
+    esp_err_t err = esp_netif_get_ip_info(s_sta_netif, &ip_info);
+    if (err != ESP_OK) {
+        return err;
+    }
+    *ip_out = ip_info.ip;
+    return ESP_OK;
+}
+
 esp_err_t wifi_mgr_get_ap_ssid(char *out, size_t out_len)
 {
     if (!s_connected) {

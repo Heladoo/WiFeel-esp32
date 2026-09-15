@@ -13,6 +13,7 @@ idf_component_register(
         "devices.c"
         "ble_scan.c"
         "wifi_sniff.c"
+        "web_status.c"
     INCLUDE_DIRS "."
     REQUIRES
         "esp_wifi"
@@ -24,6 +25,7 @@ idf_component_register(
         "esp_driver_gpio"
         "esp_timer"
         "bt"
+        "esp_http_server"
         "wifeel_proto"
         "wifeel_csi"
 )

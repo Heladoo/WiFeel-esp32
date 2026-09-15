@@ -91,6 +91,10 @@ esp_err_t wifi_mgr_get_ap_bssid(uint8_t bssid_out[6]);
 esp_err_t wifi_mgr_get_ap_channel(uint8_t *channel_out);
 esp_err_t wifi_mgr_get_gateway_ip(esp_ip4_addr_t *gw_out);
 
+/** The hub's own IP on the home network — e.g. for printing the status
+ *  dashboard's URL (see web_status.h). */
+esp_err_t wifi_mgr_get_ip(esp_ip4_addr_t *ip_out);
+
 /** Copies the connected network's SSID (NUL-terminated) into `out`, which
  *  must be at least 33 bytes (32 + NUL, the 802.11 SSID max). */
 esp_err_t wifi_mgr_get_ap_ssid(char *out, size_t out_len);

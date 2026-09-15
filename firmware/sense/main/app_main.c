@@ -6,6 +6,7 @@
 #include "freertos/task.h"
 
 #include "esp_mac.h"
+#include "lwip/ip4_addr.h"
 
 #include "board.h"
 #include "wifi_mgr.h"
@@ -18,6 +19,7 @@
 #include "devices.h"
 #include "ble_scan.h"
 #include "wifi_sniff.h"
+#include "web_status.h"
 
 static const char *TAG = "app_main";
 
@@ -77,6 +79,11 @@ static void on_wifi_connected(void)
     wifi_sniff_set_home(bssid, ssid);
 
     ESP_LOGI(TAG, "CSI+ping configured for AP " MACSTR, MAC2STR(bssid));
+
+    esp_ip4_addr_t ip = {0};
+    if (wifi_mgr_get_ip(&ip) == ESP_OK) {
+        ESP_LOGI(TAG, "status dashboard: http://" IPSTR "/", IP2STR(&ip));
+    }
 }
 
 /* S3 (display->hub): fires when the display associates to / leaves the
@@ -159,6 +166,14 @@ void app_main(void)
     err = ble_scan_init();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "ble_scan_init failed: %s (phone detection over BLE disabled)", esp_err_to_name(err));
+    }
+
+    /* After every subsystem it reads from (motion/presence/devices/csi_mgr)
+     * is already initialized above. Non-fatal: the hub's core sensing
+     * works without the web dashboard. */
+    err = web_status_init();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "web_status_init failed: %s (status dashboard disabled)", esp_err_to_name(err));
     }
 
     BaseType_t watchdog_ok = xTaskCreate(&s1_ping_watchdog_task, "s1_ping_watchdog", 2560,

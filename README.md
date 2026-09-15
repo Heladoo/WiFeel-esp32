@@ -106,22 +106,33 @@ your home network) and starts showing live data as soon as it boots.
 On the hub's console:
 
 ```
-calib [seconds]              # empty-room baseline for presence (P2); leave the room
-phones calib ble <seconds>   # hold a phone ~1m from the hub for BLE distance estimates
-phones calib wifi <seconds>  # same, for Wi-Fi-sourced distance estimates
+calib [seconds]                       # empty-room baseline for presence (P2); leave the room
+phones calib ble <seconds> [vendor]   # hold a phone ~1m from the hub; pass a vendor
+                                       # (apple/samsung/google/microsoft/other) if more
+                                       # than one BLE device is nearby, or it may
+                                       # calibrate against the wrong one
+phones calib wifi <seconds> [vendor]  # same, for Wi-Fi-sourced distance estimates
+phones calib reset ble|wifi           # undo a bad calibration, back to the default reference
 ```
 
 ## Using it
 
 - **Display, Home tile**: top stats for nearby phones, presence, and motion,
   plus a gridded trend chart of the two CSI streams (router→hub and
-  display→hub) with each line's live current value.
+  display→hub) with each line's live current value and a dashed line at
+  the motion-detection threshold.
 - **Display, Phones tile**: swipe left from Home. Shows a nearby-phones
   count, devices confirmed on your Wi-Fi network, and a nearest-first table
-  (source, type, vendor, rough range zone) of everything tracked.
+  (type, vendor, rough range zone) of everything tracked.
 - **Hub console** (`status`, `phones`, `phones raw <seconds>`, `phones
   selftest`, `motion <seconds>`): live diagnostics — packet rates, RSSI,
-  per-device detail, a self-test against known-good captured data.
+  per-device detail, a self-test against known-good captured data. `status`
+  prints the web dashboard's URL once the hub is connected.
+- **Web dashboard**: same live data (motion, presence, nearby devices,
+  packet rates) in a browser, from any device on the hub's own Wi-Fi
+  network — no app, no login. Point a browser at `http://<hub's IP>/`
+  (shown by `status`). Local-network-only by design; see
+  `firmware/sense/main/web_status.c`'s header comment.
 
 ## Known limitations
 
@@ -132,7 +143,9 @@ phones calib wifi <seconds>  # same, for Wi-Fi-sourced distance estimates
 - "Connected to Wi-Fi" detection only sees 2.4GHz traffic (the C6 has no
   5GHz radio) on the hub's own channel.
 - Some networks don't answer ICMP pings, which the hub uses to generate CSI
-  traffic — see `docs/boards.md` for the impact and workarounds.
+  traffic — see `docs/boards.md` for the impact and workarounds. The same
+  kind of restrictive/guest network may also block the web dashboard from
+  being reached by other devices, even on the same Wi-Fi.
 
 ## License
 

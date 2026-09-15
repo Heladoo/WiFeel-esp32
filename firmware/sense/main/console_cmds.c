@@ -538,6 +538,10 @@ static int cmd_status(int argc, char **argv)
         wifi_mgr_get_gateway_ip(&gw);
         printf("wifi:      connected, AP=" MACSTR " channel=%u gateway=" IPSTR "\n",
                MAC2STR(bssid), channel, IP2STR(&gw));
+        esp_ip4_addr_t ip = {0};
+        if (wifi_mgr_get_ip(&ip) == ESP_OK) {
+            printf("dashboard: http://" IPSTR "/\n", IP2STR(&ip));
+        }
     }
 
     /* CSI reporting below doesn't require an active Wi-Fi connection —

@@ -963,14 +963,64 @@ the hub's external antenna**. Both change the read on that data:
   `MOTION_ENTER_SCORE` off a 30s sample would be exactly the kind of
   under-validated tuning this project has been deliberately avoiding.
 
+## Web status dashboard on the hub (2026-09-15, later still)
+
+New feature, explicit request: check system status from a browser
+instead of walking up to the display. Deliberately local-network-only
+(user's choice) — no login, no HTTPS, no write endpoints; the hub's
+own Wi-Fi STA connection is what makes it reachable, so it's live
+exactly when the hub is on the home network.
+
+- **`web_status.c`** (`firmware/sense/main/`) starts `esp_http_server`
+  and serves two routes: `/` (a small self-contained HTML/CSS/JS page,
+  no external resources) and `/api/status` (JSON — motion, presence,
+  CSI packet rates, Wi-Fi info, free heap/uptime, and the same
+  device table as the Phones tile, reusing `ui_phones.c`'s exact type/
+  range classification logic so the two views never disagree). The
+  page polls `/api/status` every second. URL is logged on connect and
+  shown in the `status` console command (new `wifi_mgr_get_ip()`).
+- **Real bug found and fixed before calling this done**: the first
+  version used `esp_http_server`'s default task priority
+  (`tskIDLE_PRIORITY+5`) — higher than every one of this project's own
+  tasks. On boot, this measurably starved real-time networking:
+  `ping_gw`'s raw socket sends started failing continuously
+  (`ping_sock: send error=0`, many per second) and `esp_now_send`
+  began returning `ESP_ERR_ESPNOW_NO_MEM` repeatedly enough that the
+  display's SoftAP association actually dropped and reconnected — a
+  live regression, not a hypothetical one. Fixed by dropping the
+  httpd task to `tskIDLE_PRIORITY+1` (same tier as the watchdog tasks,
+  always preemptable by the sensing-critical ones) — verified with a
+  fresh 20s boot capture showing zero send errors and normal S1/S3
+  packet rates afterward.
+- **Reachability not yet confirmed from an actual phone**: tried to
+  verify the page renders from this dev machine — the in-app Browser
+  tool can't reach local/private IPs at all (sandboxed separately), and
+  a direct `Test-NetConnection` from this machine's own wired Ethernet
+  interface (same 192.168.1.0/24 subnet as the hub) got
+  `TcpTestSucceeded: False` / `PingSucceeded: False` — not even ICMP
+  reaches the hub. Given the hub's current Wi-Fi network already
+  doesn't answer ICMP pings at all (see the "Amira_Guest" findings
+  elsewhere in this doc) and is already an open question about whether
+  it's meant to be a long-term guest network, this smells like the same
+  underlying issue (guest-network client/AP isolation is a common
+  router feature, and would explain both symptoms) rather than a bug in
+  the server itself — but that's a hypothesis, not confirmed. **Needs
+  testing directly from a phone/PC actually on the hub's Wi-Fi
+  network** before considering this fully done.
+
 ### Next session should start here
-1. **Visually check the reworked Home/Phones tiles** on the physical
+1. **Try the web dashboard from an actual phone/PC on the hub's Wi-Fi**
+   (`http://<hub IP>/`, shown by the `status` console command) — not yet
+   confirmed reachable from anything (see above); likely the same
+   guest-network isolation issue as item 2 below.
+2. **Visually check the reworked Home/Phones tiles** on the physical
    screen (see above) and redo BLE distance calibration with a phone
    truly 1m away.
-2. **Ask about the "Amira_Guest" network**: is the hub meant to be on a
+3. **Ask about the "Amira_Guest" network**: is the hub meant to be on a
    guest network long-term, or would the main/home network avoid S1's
-   no-ICMP-reply limitation (~2-5 pkt/s CSI, AP frames only)?
-3. **A longer (several-minute) empty-room, fan-off baseline** to
+   no-ICMP-reply limitation (~2-5 pkt/s CSI, AP frames only) AND fix the
+   web dashboard's reachability?
+4. **A longer (several-minute) empty-room, fan-off baseline** to
    actually quantify P1's false-positive rate — the 30s 2026-09-15
    sample already found 2 MOTION crossings with nobody present and no
    fan (see above), too short a sample to know if that's ~1 per 15s
@@ -982,13 +1032,13 @@ the hub's external antenna**. Both change the read on that data:
    `wifeel_csi_stream_get_fast_jitter()` — but the right replacement
    value needs real data) — per-channel validation before any fusion
    policy changes (explicit user instruction).
-4. Redo empty-room presence calibration and validate
+5. Redo empty-room presence calibration and validate
    `PRESENCE_WANDER_THRESHOLD_S1`/`_S3` (still placeholders) against a
    real "person sitting still nearby" test, one stream at a time.
-5. Only after S1 and S3 are independently validated for both motion and
+6. Only after S1 and S3 are independently validated for both motion and
    presence: revisit the S1-alone-triggers-MOTION fusion policy question
    from the original baseline.
-6. Phone detection follow-ups (not started): count phones that aren't
+7. Phone detection follow-ups (not started): count phones that aren't
    Wi-Fi-connected via their probe requests; correlate a phone's BLE and
    Wi-Fi sightings by RSSI-over-time pattern; use the display board as a
    second BLE scanner for better distance/position; a Wi-Fi client
