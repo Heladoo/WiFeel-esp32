@@ -9,6 +9,8 @@
 #include "host/ble_hs.h"
 #include "host/util/util.h"
 
+#include "devices.h"
+
 static const char *TAG = "ble_scan";
 
 /* Fixed 30ms listen window; duty cycle is set by stretching the interval
@@ -162,8 +164,12 @@ static int gap_event(struct ble_gap_event *event, void *arg)
 {
     (void)arg;
     switch (event->type) {
-        case BLE_GAP_EVENT_DISC:
+        case BLE_GAP_EVENT_DISC: {
             s_adv_count++;
+            wifeel_vendor_t vendor;
+            bool phone_like = ble_scan_classify(event->disc.data, event->disc.length_data, &vendor, NULL);
+            devices_observe(WIFEEL_DEV_SRC_BLE, event->disc.addr.val, vendor, phone_like,
+                             (int8_t)event->disc.rssi, false);
             if (s_raw_active) {
                 ble_scan_raw_adv_t adv = {
                     .rssi = event->disc.rssi,
@@ -175,6 +181,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
                 xQueueSend(s_raw_queue, &adv, 0); /* drop if the console isn't keeping up */
             }
             return 0;
+        }
         case BLE_GAP_EVENT_DISC_COMPLETE:
             ESP_LOGW(TAG, "discovery ended (reason %d)", event->disc_complete.reason);
             return 0;

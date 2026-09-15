@@ -5,22 +5,61 @@
  * are never written to NVS, never sent over ESP-NOW, and never printed —
  * everything outside the hub identifies a device by devices_id_hash(),
  * which uses a salt that changes on every boot.
+ *
+ * Radio callbacks (ble_scan.c, and wifi_sniff.c once it exists) call
+ * devices_observe() to report a sighting; it queues the observation and
+ * returns immediately rather than touching the device table directly, so
+ * a radio ISR/task is never blocked on table bookkeeping.
  */
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 #include "esp_err.h"
+#include "wifeel_proto.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/** Seeds the per-boot hash salt. Call after Wi-Fi is started (esp_random()
- *  is only truly random once the RF subsystem is running). */
+/** Seeds the per-boot hash salt and starts the background tracking task.
+ *  Call after Wi-Fi is started (esp_random() is only truly random once the
+ *  RF subsystem is running) and after NVS is initialized. */
 esp_err_t devices_init(void);
 
 /** 16-bit id for a MAC address, stable only until the next reboot. */
 uint16_t devices_id_hash(const uint8_t mac[6]);
+
+/** Reports one sighting. Non-blocking — drops the observation if the
+ *  internal queue is full rather than stalling the calling radio task.
+ *  `phone_like` is the caller's own classifier verdict (e.g.
+ *  ble_scan_classify()'s return value) and feeds ble_phone_count in the
+ *  summary; it's ignored for WIFEEL_DEV_SRC_WIFI, which doesn't have a
+ *  phone/not-phone signal yet. `connected` is only meaningful for
+ *  WIFEEL_DEV_SRC_WIFI (see wifi_sniff.h once it exists); pass false for
+ *  BLE. */
+void devices_observe(wifeel_dev_source_t source, const uint8_t mac[6],
+                      wifeel_vendor_t vendor, bool phone_like, int8_t rssi, bool connected);
+
+/** Fills *out with the current summary (counts + up to
+ *  WIFEEL_DEVICES_MAX_ENTRIES nearest entries) for the STATE-like
+ *  broadcast and the `phones` console command. */
+void devices_get_summary(wifeel_msg_devices_t *out);
+
+/**
+ * Starts a distance-calibration window: hold the reference device (e.g. a
+ * phone) 1m from the hub for `duration_ms`, then whichever tracked entry
+ * of `source` has the strongest (least negative) smoothed RSSI when the
+ * window ends is taken as the 1m reference and saved to NVS.
+ */
+esp_err_t devices_calibrate_start(wifeel_dev_source_t source, uint32_t duration_ms);
+bool devices_calibrate_is_active(void);
+uint32_t devices_calibrate_remaining_ms(void);
+
+/** Current 1m reference RSSI per source (dBm) and the shared path-loss
+ *  exponent used for distance estimates — for `phones`/status display. */
+float devices_get_ref_1m(wifeel_dev_source_t source);
+float devices_get_path_loss_exponent(void);
 
 #ifdef __cplusplus
 }

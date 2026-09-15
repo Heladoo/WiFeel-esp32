@@ -66,6 +66,7 @@ typedef enum {
     WIFEEL_MSG_TRAIN       = 9,  /* display -> hub: start/stop a labelled recording */
     WIFEEL_MSG_PING        = 10,
     WIFEEL_MSG_PONG        = 11,
+    WIFEEL_MSG_DEVICES     = 12, /* hub -> display: nearby-phone summary, ~1 Hz */
 } wifeel_msg_type_t;
 
 typedef enum {
@@ -209,6 +210,30 @@ typedef struct {
     uint8_t  action;      /* wifeel_train_action_t */
 } wifeel_msg_train_t;
 
+/** One nearby device, sorted by distance on the sender side. `id` is a
+ *  per-boot hash (devices_id_hash()) — never a real MAC address; see
+ *  devices.h's privacy boundary comment. */
+typedef struct {
+    uint16_t id;
+    uint8_t  source;       /* wifeel_dev_source_t */
+    uint8_t  vendor;       /* wifeel_vendor_t */
+    int8_t   rssi;
+    uint8_t  distance_dm;  /* decimeters; 255 = unknown/out of range */
+    uint8_t  connected;    /* bool: on the home Wi-Fi network (WIFEEL_DEV_SRC_WIFI only) */
+    uint8_t  age_s;        /* seconds since last seen, capped at 255 */
+} wifeel_msg_device_entry_t;
+
+#define WIFEEL_DEVICES_MAX_ENTRIES 8
+
+typedef struct {
+    uint8_t  ble_phone_count;
+    uint8_t  wifi_client_count;
+    uint8_t  vendor_counts[WIFEEL_VENDOR_COUNT];
+    uint8_t  scan_duty_pct;
+    uint8_t  n_entries;    /* how many of entries[] below are valid */
+    wifeel_msg_device_entry_t entries[WIFEEL_DEVICES_MAX_ENTRIES];
+} wifeel_msg_devices_t;
+
 typedef struct {
     uint32_t t_ms;
 } wifeel_msg_ping_t;
@@ -230,6 +255,7 @@ typedef union {
     wifeel_msg_train_t      train;
     wifeel_msg_ping_t       ping;
     wifeel_msg_pong_t       pong;
+    wifeel_msg_devices_t    devices;
 } wifeel_msg_payload_t;
 
 #pragma pack(pop)

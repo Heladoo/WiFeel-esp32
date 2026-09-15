@@ -235,6 +235,135 @@ static int phones_raw(int seconds, int min_rssi)
     return 0;
 }
 
+static const char *dev_source_name(wifeel_dev_source_t s)
+{
+    return s == WIFEEL_DEV_SRC_BLE ? "BLE" : "WiFi";
+}
+
+static int phones_calib(int argc, char **argv)
+{
+    if (argc < 3) {
+        printf("usage: phones calib ble|wifi <seconds>\n");
+        return 1;
+    }
+    wifeel_dev_source_t source;
+    if (strcmp(argv[2], "ble") == 0) {
+        source = WIFEEL_DEV_SRC_BLE;
+    } else if (strcmp(argv[2], "wifi") == 0) {
+        source = WIFEEL_DEV_SRC_WIFI;
+    } else {
+        printf("usage: phones calib ble|wifi <seconds>\n");
+        return 1;
+    }
+    uint32_t duration_s = (argc >= 4) ? (uint32_t)atoi(argv[3]) : 15;
+    if (duration_s == 0) {
+        duration_s = 15;
+    }
+    if (source == WIFEEL_DEV_SRC_BLE && ble_scan_get_duty() == 0) {
+        printf("warning: BLE scanning is paused (phones duty 0) — calibration won't see anything\n");
+    }
+    devices_calibrate_start(source, duration_s * 1000);
+    printf("calibrating %s distance for %" PRIu32 " s — hold the reference device ~1m from the hub\n",
+           dev_source_name(source), duration_s);
+    return 0;
+}
+
+/* Regression test: known-good adverts captured from real hardware
+ * (docs/boards.md, 2026-09-15) run back through ble_scan_classify() so a
+ * future change to the parser can't silently break a working case. */
+static bool hex_decode(const char *hex, uint8_t *out, size_t out_cap, size_t *out_len)
+{
+    size_t n = strlen(hex);
+    if (n % 2 != 0 || n / 2 > out_cap) {
+        return false;
+    }
+    for (size_t i = 0; i < n / 2; i++) {
+        unsigned byte;
+        if (sscanf(hex + 2 * i, "%2x", &byte) != 1) {
+            return false;
+        }
+        out[i] = (uint8_t)byte;
+    }
+    *out_len = n / 2;
+    return true;
+}
+
+static int phones_selftest(void)
+{
+    static const struct {
+        const char *label;
+        const char *hex;
+        wifeel_vendor_t want_vendor;
+        bool want_phone;
+    } cases[] = {
+        {"Samsung phone", "0201021bff7500021861b1a627e1360a61cb8ab220e990409a3026f5a4ef98",
+         WIFEEL_VENDOR_SAMSUNG, true},
+        {"Windows PC", "1eff060001092022a168cda6e744063d0949dc1a5e1d414a921ae677c7d231",
+         WIFEEL_VENDOR_MICROSOFT, false},
+        {"Raspberry Pi (Broadcom)", "02010612ff5d000000019424b809aec6000000000000000000000000000000",
+         WIFEEL_VENDOR_OTHER, false},
+        {"Android Google service-data", "0201021716f1fc04d59fb4732cc0ec53239db22a0b642a3ef3f3ce",
+         WIFEEL_VENDOR_GOOGLE, false},
+    };
+
+    int passed = 0;
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        uint8_t data[31];
+        size_t len;
+        if (!hex_decode(cases[i].hex, data, sizeof(data), &len)) {
+            printf("FAIL  %-28s  (bad test hex string)\n", cases[i].label);
+            continue;
+        }
+        wifeel_vendor_t vendor;
+        bool phone = ble_scan_classify(data, len, &vendor, NULL);
+        bool ok = (vendor == cases[i].want_vendor) && (phone == cases[i].want_phone);
+        printf("%-4s  %-28s  got vendor=%s phone=%s  want vendor=%s phone=%s\n",
+               ok ? "ok" : "FAIL", cases[i].label,
+               wifeel_vendor_name(vendor), phone ? "yes" : "no",
+               wifeel_vendor_name(cases[i].want_vendor), cases[i].want_phone ? "yes" : "no");
+        if (ok) {
+            passed++;
+        }
+    }
+    printf("%d/%d passed\n", passed, (int)(sizeof(cases) / sizeof(cases[0])));
+    return (passed == (int)(sizeof(cases) / sizeof(cases[0]))) ? 0 : 1;
+}
+
+static void phones_print_summary(void)
+{
+    wifeel_msg_devices_t d;
+    devices_get_summary(&d);
+
+    printf("BLE scan duty: %u%%  adverts since boot: %" PRIu32 "\n", d.scan_duty_pct, ble_scan_adv_count());
+    printf("phones nearby (BLE): %u   on home Wi-Fi: %u\n", d.ble_phone_count, d.wifi_client_count);
+    printf("vendors: apple=%u samsung=%u google=%u microsoft=%u other=%u unknown=%u\n",
+           d.vendor_counts[WIFEEL_VENDOR_APPLE], d.vendor_counts[WIFEEL_VENDOR_SAMSUNG],
+           d.vendor_counts[WIFEEL_VENDOR_GOOGLE], d.vendor_counts[WIFEEL_VENDOR_MICROSOFT],
+           d.vendor_counts[WIFEEL_VENDOR_OTHER], d.vendor_counts[WIFEEL_VENDOR_UNKNOWN]);
+    printf("distance ref: BLE 1m=%.1fdBm  WiFi 1m=%.1fdBm  path-loss n=%.1f%s\n",
+           (double)devices_get_ref_1m(WIFEEL_DEV_SRC_BLE), (double)devices_get_ref_1m(WIFEEL_DEV_SRC_WIFI),
+           (double)devices_get_path_loss_exponent(),
+           devices_calibrate_is_active() ? "  (calibrating...)" : "");
+
+    if (d.n_entries == 0) {
+        printf("(no devices tracked yet)\n");
+        return;
+    }
+    printf("  id     src  vendor      rssi  dist    wifi  age\n");
+    for (uint8_t i = 0; i < d.n_entries; i++) {
+        const wifeel_msg_device_entry_t *e = &d.entries[i];
+        if (e->distance_dm == 255) {
+            printf("  %04x   %-4s %-10s %4d   unknown  %-3s   %us\n",
+                   e->id, dev_source_name((wifeel_dev_source_t)e->source), wifeel_vendor_name(e->vendor),
+                   e->rssi, e->connected ? "yes" : "no", e->age_s);
+        } else {
+            printf("  %04x   %-4s %-10s %4d   %4.1fm   %-3s   %us\n",
+                   e->id, dev_source_name((wifeel_dev_source_t)e->source), wifeel_vendor_name(e->vendor),
+                   e->rssi, (double)e->distance_dm / 10.0, e->connected ? "yes" : "no", e->age_s);
+        }
+    }
+}
+
 static int cmd_phones(int argc, char **argv)
 {
     if (argc >= 2 && strcmp(argv[1], "raw") == 0) {
@@ -255,8 +384,13 @@ static int cmd_phones(int argc, char **argv)
         printf("BLE scan duty set to %d%%%s\n", pct, pct == 0 ? " (paused)" : "");
         return 0;
     }
-    printf("BLE scan duty: %u%%  adverts since boot: %" PRIu32 "\n",
-           ble_scan_get_duty(), ble_scan_adv_count());
+    if (argc >= 2 && strcmp(argv[1], "calib") == 0) {
+        return phones_calib(argc, argv);
+    }
+    if (argc >= 2 && strcmp(argv[1], "selftest") == 0) {
+        return phones_selftest();
+    }
+    phones_print_summary();
     return 0;
 }
 
@@ -418,8 +552,9 @@ esp_err_t console_start(void)
 
     const esp_console_cmd_t phones_cmd = {
         .command = "phones",
-        .help = "Nearby phones: summary | raw <s> [min_rssi] | duty <0-100>",
-        .hint = "[raw <s> [min_rssi] | duty <pct>]",
+        .help = "Nearby phones: summary | raw <s> [min_rssi] | duty <0-100> | "
+                "calib ble|wifi <s> | selftest",
+        .hint = "[raw <s> [min_rssi] | duty <pct> | calib ble|wifi <s> | selftest]",
         .func = &cmd_phones,
     };
     ESP_ERROR_CHECK(esp_console_cmd_register(&phones_cmd));
