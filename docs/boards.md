@@ -665,6 +665,54 @@ Second round of UI feedback, addressed directly (not deferred this time):
   screen. Follow up once someone has eyes on it.
 - Both firmwares build with no warnings and flash clean.
 
+## UX/UI audit of the reworked tiles, high-priority fixes applied (2026-09-15)
+
+Per explicit request, a UX/UI-focused review of the tiles above (not a
+code-correctness review). Findings and what was done about them:
+
+- **Fixed — real clipping risk**: the chart's x-axis labels (`app_main.c`)
+  were placed just outside the chart with `LV_ALIGN_OUT_BOTTOM_*`,
+  leaving under ~2px of clearance against the round bezel at this chart
+  size — the tightest margin in the file. Moved all four axis labels
+  (100/0/-Ns/now) inside the chart's own rectangle instead (one per
+  corner, "0" nudged right of "-Ns" so they don't overlap), which is
+  guaranteed safe since it can never extend past the chart's own already-
+  verified bounding box.
+- **Fixed — contrast**: `ui_phones.c`'s `COLOR_MUTED` (0x5A6B73, ~3.3:1
+  against the background) didn't match Home's own muted color
+  (0x8FA3AD, ~7:1) despite meaning the same thing; unified on the more
+  legible value. `COLOR_VENDOR_UNKNOWN` (0x3A4750, ~1.9:1) was nearly
+  unreadable — directly undercutting the earlier "show Unknown, not '?'"
+  fix. Vendor Other/Unknown now share the unified muted color.
+  "Unknown" being legible was worth prioritizing here — the fact that
+  two categories now share one color is deliberate, since only a label
+  actually distinguishes them anyway.
+- **Fixed — color collision**: the presence stat's "elevated" state
+  reused the same amber as the motion stat's active color and the
+  chart's S3 series — three different concepts, one color. Presence now
+  gets its own color (teal) for that state.
+- **Fixed — icon crowding**: the Phones table's source and type icons
+  sat only 20px apart (two different glyph shapes at 14px font); widened
+  to 26px, shifted the vendor/range columns to match.
+- **Fixed — motion icon**: `LV_SYMBOL_REFRESH` reads as "reload/sync" to
+  most people, not movement; switched to `LV_SYMBOL_SHUFFLE`.
+- **Fixed — unbounded SSID text**: the network name label had no
+  width/truncation; a long SSID could overflow past its available space.
+  Now fixed-width with ellipsis truncation.
+- **Flagged, left for a future call rather than acted on unilaterally**
+  (these are design trade-offs that go against or beyond what was
+  explicitly asked for, not clear bugs):
+  - The three top stat chips are visually smaller/less prominent than
+    the old single motion circle — a real glanceability-vs-density
+    trade, but the three-chip layout is what was explicitly requested.
+  - Home and Phones use different stat-widget layouts for the same kind
+    of number (icon-above vs icon-beside).
+  - `LV_SYMBOL_USB` as the generic "other device" icon may read as
+    "this is a USB drive" — LVGL's built-in symbol set has no better
+    generic-device glyph; would need a custom icon font to do better.
+  - The Phones table's flat rectangular rows won't perfectly match the
+    circular bezel's curve, most noticeably on the outer rows.
+
 ## Backlog (deferred while phone detection is built)
 
 Phone detection (BLE + Wi-Fi sniffing, hub only) was prioritized ahead

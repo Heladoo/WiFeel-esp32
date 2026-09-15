@@ -10,14 +10,24 @@
 #define COLOR_BG         0x101418
 #define COLOR_HEADLINE   0x4FA8E8 /* matches COLOR_S1 */
 #define COLOR_WIFI_TILE  0xE8A33D /* matches COLOR_S3 */
-#define COLOR_MUTED      0x5A6B73 /* matches the Home title's muted color */
+/* Was 0x5A6B73 (~3.3:1 against COLOR_BG) — a UX pass flagged it below
+ * WCAG AA's 4.5:1 for body text, and different from Home tile's own
+ * "muted" color (0x8FA3AD, ~7:1) despite meaning the same thing. Unified
+ * on the more legible value. */
+#define COLOR_MUTED      0x8FA3AD
 #define COLOR_TEXT       0xE8EEF2
 #define COLOR_VENDOR_APPLE     0xE8EEF2
 #define COLOR_VENDOR_SAMSUNG   0x4FA8E8
 #define COLOR_VENDOR_GOOGLE    0x3DAA6E
 #define COLOR_VENDOR_MICROSOFT 0xE8A33D
-#define COLOR_VENDOR_OTHER     0x5A6B73
-#define COLOR_VENDOR_UNKNOWN   0x3A4750
+/* Other and Unknown share COLOR_MUTED (was 0x5A6B73 and 0x3A4750 — the
+ * latter computes to ~1.9:1 contrast, nearly unreadable, which undercut
+ * the whole point of spelling out "Unknown" instead of "?" per live
+ * feedback). Both mean "no confident classification," so sharing one
+ * legible color is fine — nothing distinguishes them but the label text
+ * anyway. */
+#define COLOR_VENDOR_OTHER      COLOR_MUTED
+#define COLOR_VENDOR_UNKNOWN    COLOR_MUTED
 
 static lv_obj_t *s_headline_icon;
 static lv_obj_t *s_headline_count;
@@ -177,6 +187,9 @@ void ui_phones_create(lv_obj_t *parent)
         lv_obj_set_size(r->row, 230, row_h);
         lv_obj_align(r->row, LV_ALIGN_CENTER, 0, row_y0 + i * row_h);
 
+        /* Source and type icons are two different glyph shapes 26px apart
+         * (was 20px — a UX pass found that too close for a 14px font,
+         * where the two icons could visually merge into one mark). */
         r->source_icon = lv_label_create(r->row);
         lv_obj_set_style_text_font(r->source_icon, &lv_font_montserrat_14, LV_PART_MAIN);
         lv_obj_set_style_text_color(r->source_icon, lv_color_hex(COLOR_MUTED), LV_PART_MAIN);
@@ -184,16 +197,16 @@ void ui_phones_create(lv_obj_t *parent)
 
         r->type_icon = lv_label_create(r->row);
         lv_obj_set_style_text_font(r->type_icon, &lv_font_montserrat_14, LV_PART_MAIN);
-        lv_obj_align(r->type_icon, LV_ALIGN_LEFT_MID, 20, 0);
+        lv_obj_align(r->type_icon, LV_ALIGN_LEFT_MID, 26, 0);
 
         r->vendor_label = lv_label_create(r->row);
         lv_obj_set_style_text_font(r->vendor_label, &lv_font_montserrat_14, LV_PART_MAIN);
-        lv_obj_align(r->vendor_label, LV_ALIGN_LEFT_MID, 44, 0);
+        lv_obj_align(r->vendor_label, LV_ALIGN_LEFT_MID, 50, 0);
 
         r->range_label = lv_label_create(r->row);
         lv_obj_set_style_text_font(r->range_label, &lv_font_montserrat_14, LV_PART_MAIN);
         lv_obj_set_style_text_color(r->range_label, lv_color_hex(COLOR_TEXT), LV_PART_MAIN);
-        lv_obj_align(r->range_label, LV_ALIGN_LEFT_MID, 148, 0);
+        lv_obj_align(r->range_label, LV_ALIGN_LEFT_MID, 154, 0);
 
         lv_obj_add_flag(r->row, LV_OBJ_FLAG_HIDDEN);
     }

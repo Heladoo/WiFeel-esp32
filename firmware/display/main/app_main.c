@@ -38,10 +38,17 @@
 /* Same colors used for the S1/S3 legend text and chart series, so they
  * read as one system. */
 #define COLOR_S1 0x4FA8E8 /* blue */
-#define COLOR_S3 0xE8A33D /* amber — matches the indicator's "motion" color */
+#define COLOR_S3 0xE8A33D /* amber — matches the "motion" stat's active color */
 #define COLOR_GREEN 0x3DAA6E  /* "still" / "present" */
 #define COLOR_GREY  0x3A4750  /* no data / empty */
 #define COLOR_MUTED 0x8FA3AD
+/* Presence's own "elevated" color (state MOTION) — deliberately NOT
+ * COLOR_S3: that amber already means three other things on this screen
+ * (the S3 chart series, and the motion stat's own active color), and a UX
+ * pass flagged reusing it a fourth time for a different concept (presence
+ * inferring motion vs the motion detector itself) as likely to blur
+ * together for someone pattern-matching color to meaning at a glance. */
+#define COLOR_PRESENCE_ACTIVE 0x3ABEBE /* teal */
 
 static const char *TAG = "app_main";
 
@@ -108,7 +115,7 @@ static void build_home_screen(lv_obj_t *home_tile)
      * can't clip once the icon itself fits. */
     create_stat(scr, -110, -185, LV_SYMBOL_CALL, "phones", &s_stat_phones_icon, &s_stat_phones_count);
     create_stat(scr, 0, -185, LV_SYMBOL_EYE_OPEN, "presence", &s_stat_presence_icon, &s_stat_presence_count);
-    create_stat(scr, 110, -185, LV_SYMBOL_REFRESH, "motion", &s_stat_motion_icon, &s_stat_motion_count);
+    create_stat(scr, 110, -185, LV_SYMBOL_SHUFFLE, "motion", &s_stat_motion_icon, &s_stat_motion_count);
 
     /* Trend chart: S1 (router->hub) and S3 (display->hub) motion scores
      * over the last CHART_WINDOW_S seconds, so it's visible which sensing
@@ -130,37 +137,38 @@ static void build_home_screen(lv_obj_t *home_tile)
     s_chart_s1 = lv_chart_add_series(s_chart, lv_color_hex(COLOR_S1), LV_CHART_AXIS_PRIMARY_Y);
     s_chart_s3 = lv_chart_add_series(s_chart, lv_color_hex(COLOR_S3), LV_CHART_AXIS_PRIMARY_Y);
 
-    /* Y axis (amplitude/score, 0-100), inset into the chart's own top/
-     * bottom-left corners rather than placed outside it — keeps the label
-     * positions guaranteed to fit wherever the chart itself already fits,
-     * without separately re-checking the round bezel for each one. */
+    /* Axis labels, all four inset INSIDE the chart's own rectangle rather
+     * than placed outside it (one corner each: TL/BL/BR, "0" nudged right
+     * of "-Ns" so the two bottom-left labels don't overlap) — a UX pass
+     * found the previous OUT_BOTTOM_* placement left under 2px of
+     * clearance against the round bezel at this chart size; inset labels
+     * are guaranteed safe wherever the chart itself already fits, since
+     * they never extend past its already-verified bounding box. */
     lv_obj_t *y_top = lv_label_create(scr);
     lv_label_set_text(y_top, "100");
     lv_obj_set_style_text_color(y_top, lv_color_hex(COLOR_MUTED), LV_PART_MAIN);
     lv_obj_set_style_text_font(y_top, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_align_to(y_top, s_chart, LV_ALIGN_TOP_LEFT, 2, 1);
 
-    lv_obj_t *y_bottom = lv_label_create(scr);
-    lv_label_set_text(y_bottom, "0");
-    lv_obj_set_style_text_color(y_bottom, lv_color_hex(COLOR_MUTED), LV_PART_MAIN);
-    lv_obj_set_style_text_font(y_bottom, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_align_to(y_bottom, s_chart, LV_ALIGN_BOTTOM_LEFT, 2, -1);
-
-    /* X axis (time, seconds ago) — static text, the window size never
-     * changes at runtime. */
     char oldest_label[8];
     snprintf(oldest_label, sizeof(oldest_label), "-%ds", CHART_WINDOW_S);
     lv_obj_t *x_left = lv_label_create(scr);
     lv_label_set_text(x_left, oldest_label);
     lv_obj_set_style_text_color(x_left, lv_color_hex(COLOR_MUTED), LV_PART_MAIN);
     lv_obj_set_style_text_font(x_left, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_align_to(x_left, s_chart, LV_ALIGN_OUT_BOTTOM_LEFT, 2, 2);
+    lv_obj_align_to(x_left, s_chart, LV_ALIGN_BOTTOM_LEFT, 2, -1);
+
+    lv_obj_t *y_bottom = lv_label_create(scr);
+    lv_label_set_text(y_bottom, "0");
+    lv_obj_set_style_text_color(y_bottom, lv_color_hex(COLOR_MUTED), LV_PART_MAIN);
+    lv_obj_set_style_text_font(y_bottom, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_align_to(y_bottom, x_left, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
 
     lv_obj_t *x_right = lv_label_create(scr);
     lv_label_set_text(x_right, "now");
     lv_obj_set_style_text_color(x_right, lv_color_hex(COLOR_MUTED), LV_PART_MAIN);
     lv_obj_set_style_text_font(x_right, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_align_to(x_right, s_chart, LV_ALIGN_OUT_BOTTOM_RIGHT, -2, 2);
+    lv_obj_align_to(x_right, s_chart, LV_ALIGN_BOTTOM_RIGHT, -2, -1);
 
     /* Legend, doubling as each trace's current value (reported live: "show
      * current value for each trace line") — text is rewritten every tick
@@ -184,6 +192,9 @@ static void build_home_screen(lv_obj_t *home_tile)
     lv_label_set_text(s_network_label, "");
     lv_obj_set_style_text_color(s_network_label, lv_color_hex(COLOR_MUTED), LV_PART_MAIN);
     lv_obj_set_style_text_font(s_network_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_label_set_long_mode(s_network_label, LV_LABEL_LONG_DOT); /* SSID can be up to 32 chars */
+    lv_obj_set_width(s_network_label, 220);
+    lv_obj_set_style_text_align(s_network_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
     lv_obj_align_to(s_network_label, s_chart, LV_ALIGN_OUT_BOTTOM_MID, 0, 22);
 
     s_link_label = lv_label_create(scr);
@@ -273,7 +284,7 @@ static void ui_update_task(void *arg)
             bool present = state.presence_state != WIFEEL_PRESENCE_EMPTY;
             lv_label_set_text_fmt(s_stat_presence_count, "%u", present ? 1u : 0u);
             uint32_t presence_color = !present ? COLOR_GREY :
-                (state.presence_state == WIFEEL_PRESENCE_MOTION ? COLOR_S3 : COLOR_GREEN);
+                (state.presence_state == WIFEEL_PRESENCE_MOTION ? COLOR_PRESENCE_ACTIVE : COLOR_GREEN);
             set_stat_color(s_stat_presence_icon, s_stat_presence_count, presence_color);
 
             lv_label_set_text_fmt(s_stat_motion_count, "%u", state.motion_score);
