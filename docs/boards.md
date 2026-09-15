@@ -550,6 +550,34 @@ Ambient capture (15s, nobody's phone nearby): a Microsoft PC, a Samsung
 device, an advert named "BYD BLE3" (likely a car), all at -85 to -100 dBm.
 No Apple adverts.
 
+## BLE vendor classifier validated against real devices (2026-09-15)
+
+With 4 known devices on the desk (PC, Zigbee hub, Raspberry Pi, Samsung
+phone), captured via `phones raw`:
+
+| Captured signal | Company/UUID (Bluetooth SIG registry, fetched live) | Matched device |
+|---|---|---|
+| Manufacturer id `0x0006` | Microsoft Corporation | PC |
+| Manufacturer id `0x0075` | Samsung Electronics Co. Ltd. | Samsung phone |
+| Manufacturer id `0x005D` | Broadcom Corporation | Raspberry Pi (Broadcom/Cypress wireless chip is standard on Pi boards) |
+| Service Data (AD 0x16) UUID `0xFCF1` | Google LLC (member UUID) | Android/Google Play Services beacon, seen alongside the Samsung phone's own advert |
+
+Zigbee hub never appeared — plausible, since Zigbee (802.15.4) is a
+separate radio from BLE and plenty of Zigbee-only hub chips don't
+implement BLE at all.
+
+**`ble_scan.c` updated**: added `COMPANY_BROADCOM` (documented as
+non-phone, matches the existing default), and service-data (AD type
+`0x16`) parsing for Google's `0xFCF1` member UUID — `ble_scan_classify()`
+now scans every AD structure in an advert rather than stopping at the
+first one, since a single advert can carry both a manufacturer-data field
+and a service-data field. Google-via-service-data is not scored
+phone-like (could equally be a Chromecast/speaker/TV); Samsung and
+Google-via-manufacturer-data remain provisional per the original plan.
+
+Sources used: [Bluetooth SIG company identifiers](https://bitbucket.org/bluetooth-SIG/public/raw/main/assigned_numbers/company_identifiers/company_identifiers.yaml),
+[Bluetooth SIG member UUIDs](https://bitbucket.org/bluetooth-SIG/public/raw/main/assigned_numbers/uuids/member_uuids.yaml).
+
 ## Backlog (deferred while phone detection is built)
 
 Phone detection (BLE + Wi-Fi sniffing, hub only) was prioritized ahead

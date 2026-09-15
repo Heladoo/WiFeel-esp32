@@ -20,6 +20,20 @@ static const char *TAG = "ble_scan";
 #define COMPANY_SAMSUNG   0x0075
 #define COMPANY_GOOGLE    0x00E0
 #define COMPANY_MICROSOFT 0x0006
+/* Not a phone vendor — Broadcom/Cypress wireless chips are standard on
+ * Raspberry Pi boards. Confirmed against a real Pi's advert on 2026-09-15
+ * (see docs/boards.md); kept as WIFEEL_VENDOR_OTHER (matches the default
+ * case) but named explicitly so it isn't confused for an unhandled id. */
+#define COMPANY_BROADCOM 0x005D
+
+/* 16-bit "member" service UUID registered to Google LLC (Bluetooth SIG
+ * assigned numbers, uuids/member_uuids.yaml) — seen in AD type 0x16
+ * (Service Data), not manufacturer data. This is Android/Google Play
+ * Services' own cross-device beacon, confirmed live alongside a Samsung
+ * phone's manufacturer-data advert on 2026-09-15. Not scored as
+ * "phone-like" on its own: the same UUID could just as well come from a
+ * Chromecast, Android TV, or Google smart speaker. */
+#define GOOGLE_SERVICE_UUID 0xFCF1
 
 /* Apple Continuity message types (first byte of each TLV after the company
  * ID). Sent by iPhones: Nearby Info, Handoff, Nearby Action. Not phones:
@@ -68,12 +82,27 @@ static bool apple_is_phone_like(const uint8_t *p, size_t len, uint8_t *first_typ
     return phone;
 }
 
+/* Scans every AD structure rather than stopping at the first one: a single
+ * advert can carry both a manufacturer-data field and a service-data field
+ * (seen live — Android phones send their OEM's manufacturer-data alongside
+ * Google Play Services' own service-data beacon), and an unrecognized
+ * manufacturer id shouldn't shadow a recognized service-data match found
+ * later in the same packet. Priority: a recognized manufacturer id (has a
+ * real phone/not-phone answer) beats the Google service-data UUID (vendor
+ * only, no phone answer) beats an unrecognized manufacturer id (-> Other)
+ * beats nothing found (-> Unknown). */
 bool ble_scan_classify(const uint8_t *data, size_t len, wifeel_vendor_t *vendor, uint8_t *apple_type)
 {
     *vendor = WIFEEL_VENDOR_UNKNOWN;
     if (apple_type) {
         *apple_type = 0;
     }
+
+    bool have_result = false;
+    wifeel_vendor_t best_vendor = WIFEEL_VENDOR_UNKNOWN;
+    bool best_phone = false;
+    uint8_t best_apple_type = 0;
+    bool saw_unrecognized_mfg = false;
 
     size_t i = 0;
     while (i < len) {
@@ -100,13 +129,32 @@ bool ble_scan_classify(const uint8_t *data, size_t len, wifeel_vendor_t *vendor,
                 case COMPANY_MICROSOFT:
                     *vendor = WIFEEL_VENDOR_MICROSOFT; /* Windows PCs */
                     return false;
+                case COMPANY_BROADCOM:
+                    saw_unrecognized_mfg = true; /* e.g. Raspberry Pi's onboard wireless chip */
+                    break;
                 default:
-                    *vendor = WIFEEL_VENDOR_OTHER;
-                    return false;
+                    saw_unrecognized_mfg = true;
+                    break;
+            }
+        } else if (ad_type == 0x16 && val_len >= 2 && !have_result) { /* service data, 16-bit UUID */
+            uint16_t uuid = (uint16_t)(val[0] | (val[1] << 8));
+            if (uuid == GOOGLE_SERVICE_UUID) {
+                have_result = true;
+                best_vendor = WIFEEL_VENDOR_GOOGLE;
+                best_phone = false; /* see GOOGLE_SERVICE_UUID's comment — not phone-specific */
             }
         }
         i += 1u + field_len;
     }
+
+    if (have_result) {
+        *vendor = best_vendor;
+        if (apple_type) {
+            *apple_type = best_apple_type;
+        }
+        return best_phone;
+    }
+    *vendor = saw_unrecognized_mfg ? WIFEEL_VENDOR_OTHER : WIFEEL_VENDOR_UNKNOWN;
     return false;
 }
 
