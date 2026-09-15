@@ -35,6 +35,10 @@ esp_err_t link_init(void);
  */
 bool link_get_latest_state(wifeel_msg_state_t *out, uint32_t *age_ms_out);
 
+/** Same as link_get_latest_state(), for the ~1Hz WIFEEL_MSG_DEVICES
+ *  (nearby-phone summary) broadcast. */
+bool link_get_latest_devices(wifeel_msg_devices_t *out, uint32_t *age_ms_out);
+
 #ifdef __cplusplus
 }
 #endif

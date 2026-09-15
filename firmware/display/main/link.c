@@ -37,6 +37,11 @@ static wifeel_msg_state_t s_latest_state;
 static bool s_have_state;
 static int64_t s_latest_state_us;
 
+static portMUX_TYPE s_devices_mux = portMUX_INITIALIZER_UNLOCKED;
+static wifeel_msg_devices_t s_latest_devices;
+static bool s_have_devices;
+static int64_t s_latest_devices_us;
+
 static esp_netif_t *s_sta_netif;
 
 static void on_recv(const esp_now_recv_info_t *info, const uint8_t *data, int len)
@@ -50,15 +55,25 @@ static void on_recv(const esp_now_recv_info_t *info, const uint8_t *data, int le
     if (!wifeel_proto_unpack(data, (size_t)len, &type, &seq, &payload, &payload_len)) {
         return; /* corrupt/foreign frame — silently drop, not our protocol */
     }
-    if (type != WIFEEL_MSG_STATE || payload_len < sizeof(wifeel_msg_state_t)) {
-        return;
+    if (type == WIFEEL_MSG_STATE && payload_len >= sizeof(wifeel_msg_state_t)) {
+        portENTER_CRITICAL(&s_state_mux);
+        memcpy(&s_latest_state, payload, sizeof(s_latest_state));
+        s_have_state = true;
+        s_latest_state_us = esp_timer_get_time();
+        portEXIT_CRITICAL(&s_state_mux);
+    } else if (type == WIFEEL_MSG_DEVICES && payload_len >= sizeof(wifeel_msg_devices_t)) {
+        portENTER_CRITICAL(&s_devices_mux);
+        memcpy(&s_latest_devices, payload, sizeof(s_latest_devices));
+        s_have_devices = true;
+        s_latest_devices_us = esp_timer_get_time();
+        portEXIT_CRITICAL(&s_devices_mux);
+        /* Only ~1Hz (see firmware/sense/main/link.c) — cheap to log every
+         * time, and it's the only visibility into whether the Phones
+         * page's counts reflect what the hub is actually sending. */
+        ESP_LOGI(TAG, "devices rx: ble=%u wifi=%u n_entries=%u",
+                 s_latest_devices.ble_phone_count, s_latest_devices.wifi_client_count,
+                 s_latest_devices.n_entries);
     }
-
-    portENTER_CRITICAL(&s_state_mux);
-    memcpy(&s_latest_state, payload, sizeof(s_latest_state));
-    s_have_state = true;
-    s_latest_state_us = esp_timer_get_time();
-    portEXIT_CRITICAL(&s_state_mux);
 }
 
 bool link_get_latest_state(wifeel_msg_state_t *out, uint32_t *age_ms_out)
@@ -72,6 +87,24 @@ bool link_get_latest_state(wifeel_msg_state_t *out, uint32_t *age_ms_out)
     }
     int64_t age_us = now - s_latest_state_us;
     portEXIT_CRITICAL(&s_state_mux);
+
+    if (have && age_ms_out) {
+        *age_ms_out = (uint32_t)(age_us / 1000);
+    }
+    return have;
+}
+
+bool link_get_latest_devices(wifeel_msg_devices_t *out, uint32_t *age_ms_out)
+{
+    bool have;
+    int64_t now = esp_timer_get_time();
+    portENTER_CRITICAL(&s_devices_mux);
+    have = s_have_devices;
+    if (have && out) {
+        memcpy(out, &s_latest_devices, sizeof(*out));
+    }
+    int64_t age_us = now - s_latest_devices_us;
+    portEXIT_CRITICAL(&s_devices_mux);
 
     if (have && age_ms_out) {
         *age_ms_out = (uint32_t)(age_us / 1000);

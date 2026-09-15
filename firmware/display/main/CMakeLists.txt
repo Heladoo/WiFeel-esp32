@@ -5,6 +5,7 @@ idf_component_register(
         "touch.c"
         "link.c"
         "ping_gw.c"
+        "ui_phones.c"
     INCLUDE_DIRS "."
     REQUIRES
         "esp_lcd"

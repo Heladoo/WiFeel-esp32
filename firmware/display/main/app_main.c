@@ -8,6 +8,7 @@
 #include "bsp_amoled.h"
 #include "touch.h"
 #include "link.h"
+#include "ui_phones.h"
 
 /* Bump on every behavior change — matches firmware/sense's board.h
  * convention (see CLAUDE.md). */
@@ -19,7 +20,13 @@
  * is out of range. */
 #define LINK_STALE_MS 4000
 #define UI_UPDATE_INTERVAL_MS 333 /* matches the hub's ~3Hz broadcast rate */
-#define CHART_POINT_COUNT 40      /* ~13s of history at this update rate */
+#define CHART_POINT_COUNT 80      /* ~26s of history at this update rate (user asked to double the original ~13s) */
+
+/* Dark background for the whole app — set on the root screen and the
+ * tileview itself, not just each tile, so no default-theme light
+ * background can show through (e.g. during a swipe, or at the tileview's
+ * own edges). */
+#define COLOR_BG 0x101418
 
 /* Same colors used for the S1/S3 legend text and chart series, so they
  * read as one system. */
@@ -38,10 +45,15 @@ static lv_obj_t *s_chart;
 static lv_chart_series_t *s_chart_s1;
 static lv_chart_series_t *s_chart_s3;
 
-static void build_home_screen(void)
+/** Builds the Home tile's widgets under `home_tile` (one tile of the
+ *  top-level lv_tileview — see build_screen()). Unchanged from before the
+ *  Phones tile existed, aside from creating on `home_tile` instead of the
+ *  screen directly. */
+static void build_home_screen(lv_obj_t *home_tile)
 {
-    lv_obj_t *scr = lv_screen_active();
-    lv_obj_set_style_bg_color(scr, lv_color_hex(0x101418), LV_PART_MAIN);
+    lv_obj_t *scr = home_tile;
+    lv_obj_set_style_bg_color(scr, lv_color_hex(COLOR_BG), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, LV_PART_MAIN);
 
     lv_obj_t *title = lv_label_create(scr);
     lv_label_set_text(title, "WiFeel");
@@ -109,6 +121,28 @@ static void build_home_screen(void)
     lv_obj_align(s_link_label, LV_ALIGN_BOTTOM_MID, 0, -26);
 }
 
+/** Home tile + Phones tile, side by side in one horizontally-swipeable
+ *  lv_tileview. Dark background is set on the screen AND the tileview
+ *  itself (not just each tile) — LVGL's default theme background is
+ *  light, and without this it showed through around/behind the tileview
+ *  (reported live: "background changed to white"). */
+static void build_screen(void)
+{
+    lv_obj_t *scr = lv_screen_active();
+    lv_obj_set_style_bg_color(scr, lv_color_hex(COLOR_BG), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, LV_PART_MAIN);
+
+    lv_obj_t *tv = lv_tileview_create(scr);
+    lv_obj_set_style_bg_color(tv, lv_color_hex(COLOR_BG), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(tv, LV_OPA_COVER, LV_PART_MAIN);
+
+    lv_obj_t *home_tile = lv_tileview_add_tile(tv, 0, 0, LV_DIR_HOR);
+    lv_obj_t *phones_tile = lv_tileview_add_tile(tv, 1, 0, LV_DIR_HOR);
+
+    build_home_screen(home_tile);
+    ui_phones_create(phones_tile);
+}
+
 static void ui_update_task(void *arg)
 {
     (void)arg;
@@ -119,9 +153,15 @@ static void ui_update_task(void *arg)
         uint32_t age_ms = 0;
         bool have = link_get_latest_state(&state, &age_ms);
 
+        wifeel_msg_devices_t devices;
+        uint32_t devices_age_ms = 0;
+        bool have_devices = link_get_latest_devices(&devices, &devices_age_ms);
+
         if (!bsp_amoled_lvgl_lock(100)) {
             continue; /* UI busy this tick, try again next time rather than block */
         }
+
+        ui_phones_update(have_devices, &devices, devices_age_ms);
 
         if (!have) {
             lv_obj_set_style_bg_color(s_indicator, lv_color_hex(0x3A4750), LV_PART_MAIN);
@@ -168,7 +208,7 @@ void app_main(void)
     ESP_LOGI(TAG, "==================================================");
 
     if (bsp_amoled_lvgl_lock(-1)) {
-        build_home_screen();
+        build_screen();
         bsp_amoled_lvgl_unlock();
     }
 

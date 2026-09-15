@@ -12,6 +12,7 @@
 #include "presence.h"
 #include "wifi_mgr.h"
 #include "board.h"
+#include "devices.h"
 
 static const char *TAG = "link";
 static const uint8_t s_broadcast_mac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -26,9 +27,11 @@ static void link_task(void *arg)
 {
     (void)arg;
     uint16_t seq = 0;
+    uint32_t iteration = 0;
 
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(1000 / LINK_RATE_HZ));
+        iteration++;
 
         wifeel_msg_state_t state = {0};
 
@@ -64,12 +67,29 @@ static void link_task(void *arg)
         uint8_t buf[WIFEEL_PROTO_MAX_LEN];
         size_t len = wifeel_proto_pack(buf, WIFEEL_MSG_STATE, seq++, &state, sizeof(state));
         if (len == 0) {
-            ESP_LOGW(TAG, "wifeel_proto_pack failed");
-            continue;
+            ESP_LOGW(TAG, "wifeel_proto_pack (state) failed");
+        } else {
+            esp_err_t err = esp_now_send(s_broadcast_mac, buf, len);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "esp_now_send (state) failed: %s", esp_err_to_name(err));
+            }
         }
-        esp_err_t err = esp_now_send(s_broadcast_mac, buf, len);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "esp_now_send failed: %s", esp_err_to_name(err));
+
+        /* Nearby-phone summary at ~1Hz (every LINK_RATE_HZ-th pass) — it
+         * doesn't need STATE's update rate; devices.c's own expiry is
+         * already on a multi-second timescale. */
+        if (iteration % LINK_RATE_HZ == 0) {
+            wifeel_msg_devices_t devices;
+            devices_get_summary(&devices);
+            len = wifeel_proto_pack(buf, WIFEEL_MSG_DEVICES, seq++, &devices, sizeof(devices));
+            if (len == 0) {
+                ESP_LOGW(TAG, "wifeel_proto_pack (devices) failed");
+            } else {
+                esp_err_t err = esp_now_send(s_broadcast_mac, buf, len);
+                if (err != ESP_OK) {
+                    ESP_LOGW(TAG, "esp_now_send (devices) failed: %s", esp_err_to_name(err));
+                }
+            }
         }
     }
 }
