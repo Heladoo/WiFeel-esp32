@@ -23,6 +23,7 @@
 #include "wifeel_csi.h"
 #include "ble_scan.h"
 #include "devices.h"
+#include "wifi_sniff.h"
 #include "esp_timer.h"
 
 static const char *TAG = "console";
@@ -306,8 +307,9 @@ static int phones_selftest(void)
          WIFEEL_VENDOR_GOOGLE, false},
     };
 
-    int passed = 0;
+    int total = 0, passed = 0;
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        total++;
         uint8_t data[31];
         size_t len;
         if (!hex_decode(cases[i].hex, data, sizeof(data), &len)) {
@@ -325,8 +327,71 @@ static int phones_selftest(void)
             passed++;
         }
     }
-    printf("%d/%d passed\n", passed, (int)(sizeof(cases) / sizeof(cases[0])));
-    return (passed == (int)(sizeof(cases) / sizeof(cases[0]))) ? 0 : 1;
+
+    /* Synthetic 802.11 frames (constructed by hand from the spec, not
+     * captured — real captures would carry other clients' MACs). */
+    static const struct {
+        const char *label;
+        const char *hex;
+        bool want_parses;
+        uint8_t want_bssid[6];
+        uint8_t want_client[6];
+        bool want_to_ds;
+    } wifi_cases[] = {
+        {"data ToDS (client->AP)",
+         "08010000AAAAAAAAAAAABBBBBBBBBBBBCCCCCCCCCCCC0000",
+         true, {0xAA,0xAA,0xAA,0xAA,0xAA,0xAA}, {0xBB,0xBB,0xBB,0xBB,0xBB,0xBB}, true},
+        {"data FromDS (AP->client)",
+         "08020000DDDDDDDDDDDDAAAAAAAAAAAAEEEEEEEEEEEE0000",
+         true, {0xAA,0xAA,0xAA,0xAA,0xAA,0xAA}, {0xDD,0xDD,0xDD,0xDD,0xDD,0xDD}, false},
+        {"IBSS/ad-hoc (neither ToDS nor FromDS)",
+         "08000000AAAAAAAAAAAABBBBBBBBBBBBCCCCCCCCCCCC0000",
+         false, {0}, {0}, false},
+    };
+    for (size_t i = 0; i < sizeof(wifi_cases) / sizeof(wifi_cases[0]); i++) {
+        total++;
+        uint8_t data[64];
+        size_t len;
+        if (!hex_decode(wifi_cases[i].hex, data, sizeof(data), &len)) {
+            printf("FAIL  %-28s  (bad test hex string)\n", wifi_cases[i].label);
+            continue;
+        }
+        uint8_t bssid[6] = {0}, client[6] = {0};
+        bool to_ds = false;
+        bool parsed = wifi_sniff_parse_data_frame(data, (uint16_t)len, bssid, client, &to_ds);
+        bool ok = (parsed == wifi_cases[i].want_parses) &&
+                  (!parsed || (memcmp(bssid, wifi_cases[i].want_bssid, 6) == 0 &&
+                               memcmp(client, wifi_cases[i].want_client, 6) == 0 &&
+                               to_ds == wifi_cases[i].want_to_ds));
+        printf("%-4s  %-28s  parsed=%s%s\n", ok ? "ok" : "FAIL", wifi_cases[i].label,
+               parsed ? "yes" : "no",
+               parsed ? (to_ds ? " to_ds" : " from_ds") : "");
+        if (ok) {
+            passed++;
+        }
+    }
+
+    {
+        total++;
+        static const char *beacon_hex =
+            "80000000FFFFFFFFFFFFAAAAAAAAAAAAAAAAAAAAAAAA0000"
+            "000000000000000064000104"
+            "000A57694665656C54657374";
+        uint8_t data[64];
+        size_t len;
+        uint8_t bssid[6] = {0}, ssid[32] = {0}, ssid_len = 0;
+        bool ok = hex_decode(beacon_hex, data, sizeof(data), &len) &&
+                  wifi_sniff_parse_beacon(data, (uint16_t)len, bssid, ssid, &ssid_len) &&
+                  ssid_len == 10 && memcmp(ssid, "WiFeelTest", 10) == 0 &&
+                  memcmp(bssid, (uint8_t[6]){0xAA,0xAA,0xAA,0xAA,0xAA,0xAA}, 6) == 0;
+        printf("%-4s  %-28s  ssid_len=%u\n", ok ? "ok" : "FAIL", "beacon SSID parse", ssid_len);
+        if (ok) {
+            passed++;
+        }
+    }
+
+    printf("%d/%d passed\n", passed, total);
+    return (passed == total) ? 0 : 1;
 }
 
 static void phones_print_summary(void)
@@ -344,6 +409,13 @@ static void phones_print_summary(void)
            (double)devices_get_ref_1m(WIFEEL_DEV_SRC_BLE), (double)devices_get_ref_1m(WIFEEL_DEV_SRC_WIFI),
            (double)devices_get_path_loss_exponent(),
            devices_calibrate_is_active() ? "  (calibrating...)" : "");
+
+    wifi_sniff_stats_t ws;
+    wifi_sniff_get_stats(&ws);
+    printf("wifi sniff: home BSSIDs=%u  data frames=%" PRIu32 "  (ibss/wds=%" PRIu32
+           " not-home=%" PRIu32 " excluded=%" PRIu32 ")  tracked=%" PRIu32 "\n",
+           ws.home_bssid_count, ws.data_frames_seen, ws.ibss_or_wds_skipped,
+           ws.not_home_bssid, ws.excluded_client, ws.tracked);
 
     if (d.n_entries == 0) {
         printf("(no devices tracked yet)\n");

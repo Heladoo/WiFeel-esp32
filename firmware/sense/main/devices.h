@@ -30,16 +30,26 @@ esp_err_t devices_init(void);
 /** 16-bit id for a MAC address, stable only until the next reboot. */
 uint16_t devices_id_hash(const uint8_t mac[6]);
 
-/** Reports one sighting. Non-blocking — drops the observation if the
+/** Reports one sighting with a usable RSSI reading — updates the entry's
+ *  smoothed distance estimate. Non-blocking — drops the observation if the
  *  internal queue is full rather than stalling the calling radio task.
  *  `phone_like` is the caller's own classifier verdict (e.g.
  *  ble_scan_classify()'s return value) and feeds ble_phone_count in the
  *  summary; it's ignored for WIFEEL_DEV_SRC_WIFI, which doesn't have a
  *  phone/not-phone signal yet. `connected` is only meaningful for
- *  WIFEEL_DEV_SRC_WIFI (see wifi_sniff.h once it exists); pass false for
- *  BLE. */
+ *  WIFEEL_DEV_SRC_WIFI; pass false for BLE. */
 void devices_observe(wifeel_dev_source_t source, const uint8_t mac[6],
                       wifeel_vendor_t vendor, bool phone_like, int8_t rssi, bool connected);
+
+/**
+ * Reports that a device is still present WITHOUT a usable RSSI reading —
+ * refreshes last-seen/connected only, leaves distance untouched. For
+ * wifi_sniff.c's AP-to-client frames: the RSSI measured on those is the
+ * AP's signal, not the client's, so applying it would corrupt the
+ * client's distance estimate even though the frame does prove it's still
+ * there.
+ */
+void devices_touch(wifeel_dev_source_t source, const uint8_t mac[6], bool connected);
 
 /** Fills *out with the current summary (counts + up to
  *  WIFEEL_DEVICES_MAX_ENTRIES nearest entries) for the STATE-like

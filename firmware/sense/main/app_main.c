@@ -17,6 +17,7 @@
 #include "console_cmds.h"
 #include "devices.h"
 #include "ble_scan.h"
+#include "wifi_sniff.h"
 
 static const char *TAG = "app_main";
 
@@ -71,6 +72,10 @@ static void on_wifi_connected(void)
         ESP_LOGW(TAG, "ping_gw_start failed: %s", esp_err_to_name(err));
     }
 
+    char ssid[WIFEEL_SSID_MAX_LEN + 1] = {0};
+    wifi_mgr_get_ap_ssid(ssid, sizeof(ssid)); /* best-effort; wifi_sniff just won't match beacons if this fails */
+    wifi_sniff_set_home(bssid, ssid);
+
     ESP_LOGI(TAG, "CSI+ping configured for AP " MACSTR, MAC2STR(bssid));
 }
 
@@ -83,6 +88,9 @@ static void on_ap_peer_connected(const uint8_t mac[6])
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "csi_mgr_set_source_mac (S3) failed: %s", esp_err_to_name(err));
     }
+    /* So wifi_sniff.c never counts the display's own WiFeel-Link
+     * association as a "nearby phone" on the home network. */
+    wifi_sniff_set_display_mac(mac);
     ESP_LOGI(TAG, "S3 now tracking display " MACSTR, MAC2STR(mac));
 }
 
@@ -91,6 +99,7 @@ static void on_ap_peer_disconnected(const uint8_t mac[6])
     static const uint8_t zero_mac[6] = {0};
     (void)mac;
     csi_mgr_set_source_mac(WIFEEL_STREAM_DISPLAY_TO_HUB, zero_mac);
+    wifi_sniff_set_display_mac(zero_mac);
     ESP_LOGI(TAG, "S3 stopped (display disconnected)");
 }
 
@@ -139,6 +148,13 @@ void app_main(void)
     ESP_ERROR_CHECK(presence_init());
     ESP_ERROR_CHECK(link_init());
     ESP_ERROR_CHECK(devices_init());
+    /* After csi_mgr_init() (needs promiscuous mode already on) and
+     * devices_init() (needs its observation queue to exist). Non-fatal:
+     * the hub's core sensing works without Wi-Fi client tracking. */
+    err = wifi_sniff_init();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "wifi_sniff_init failed: %s (Wi-Fi phone detection disabled)", esp_err_to_name(err));
+    }
     /* Non-fatal: the hub's core sensing works without BLE. */
     err = ble_scan_init();
     if (err != ESP_OK) {

@@ -12,6 +12,7 @@ idf_component_register(
         "console_cmds.c"
         "devices.c"
         "ble_scan.c"
+        "wifi_sniff.c"
     INCLUDE_DIRS "."
     REQUIRES
         "esp_wifi"

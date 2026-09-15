@@ -45,6 +45,7 @@ typedef struct {
     bool phone_like;
     int8_t rssi;
     bool connected;
+    bool touch_only; /* true: only refresh last-seen/connected, skip RSSI (see devices_touch()) */
 } observation_t;
 
 typedef struct {
@@ -173,12 +174,17 @@ static void apply_observation_locked(const observation_t *obs)
         slot->id = devices_id_hash(obs->mac);
         slot->source = obs->source;
     }
+    slot->connected = obs->connected;
+    slot->last_seen_us = esp_timer_get_time();
+
+    if (obs->touch_only) {
+        return; /* presence/connected refreshed above; RSSI intentionally left alone */
+    }
+
     if (obs->vendor != WIFEEL_VENDOR_UNKNOWN) {
         slot->vendor = obs->vendor; /* keep the most recent non-unknown classification */
         slot->phone_like = obs->phone_like;
     }
-    slot->connected = obs->connected;
-    slot->last_seen_us = esp_timer_get_time();
 
     slot->rssi_history[slot->rssi_history_next] = obs->rssi;
     slot->rssi_history_next = (uint8_t)((slot->rssi_history_next + 1) % RSSI_HISTORY_LEN);
@@ -289,6 +295,20 @@ void devices_observe(wifeel_dev_source_t source, const uint8_t mac[6],
     };
     memcpy(obs.mac, mac, 6);
     xQueueSend(s_obs_queue, &obs, 0); /* never block a radio callback; drop if full */
+}
+
+void devices_touch(wifeel_dev_source_t source, const uint8_t mac[6], bool connected)
+{
+    if (!s_obs_queue) {
+        return;
+    }
+    observation_t obs = {
+        .source = source,
+        .connected = connected,
+        .touch_only = true,
+    };
+    memcpy(obs.mac, mac, 6);
+    xQueueSend(s_obs_queue, &obs, 0);
 }
 
 static float distance_meters(wifeel_dev_source_t source, float rssi_dbm)
