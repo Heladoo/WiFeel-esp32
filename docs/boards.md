@@ -834,6 +834,36 @@ Answered from evidence, not guesses:
 Phone detection (BLE + Wi-Fi sniffing, hub only) was prioritized ahead
 of these by the user on 2026-09-14:
 
+- **Web dashboard (2026-09-15) is unreachable from everything tested**
+  — guest network, primary network, and the user's own PC all failed,
+  which rules out guest-network client isolation as the cause (that
+  can't explain a primary-network failure). The server itself starts
+  without error and the hub stays healthy (confirmed via `status` and
+  clean boot logs), so the fault is somewhere between "the socket is
+  actually open and accepting" and "a browser can complete a request."
+  Not investigated this session — leads for next time, roughly in the
+  order to try them:
+  - Confirm the IP printed by `status` is still current — DHCP could
+    have re-leased a different address since http://192.168.1.132/ was
+    last given out; re-run `status` fresh rather than reusing the old
+    URL.
+  - From the hub's own console, confirm the httpd task is actually
+    alive and the socket bound (no direct command exists yet for this —
+    might be worth adding one, e.g. a `web` status subcommand).
+  - Try curl/Invoke-WebRequest from a machine on the SAME Wi-Fi AP the
+    hub is on (not just the same subnet/router) — isolate router-level
+    routing from AP-level association weirdness.
+  - Check whether ESP-IDF's `esp_http_server` needs anything beyond
+    `httpd_start()` on this target/IDF version to bind on all
+    interfaces vs. just one netif (STA vs AP) — the hub runs APSTA
+    (both its own SoftAP and the home network STA simultaneously);
+    it's possible the server only bound to one of the two netifs'
+    interfaces and the home-network STA isn't it.
+  - Try a port other than 80 in case something (router, OS) is
+    filtering port 80 specifically inbound to non-standard devices.
+  - Consider a minimal `curl -v` (or PowerShell's `-Verbose`) capture
+    to see exactly where the connection attempt fails (DNS/ARP resolve,
+    TCP SYN, or after connect) rather than just pass/fail.
 - **Console typing**: the hub's constant logging makes the interactive
   console unusable, so `join` can't be typed by hand. Needs a `quiet`
   command or a lower default log level. Workaround written:
@@ -992,27 +1022,26 @@ exactly when the hub is on the home network.
   always preemptable by the sensing-critical ones) — verified with a
   fresh 20s boot capture showing zero send errors and normal S1/S3
   packet rates afterward.
-- **Reachability not yet confirmed from an actual phone**: tried to
-  verify the page renders from this dev machine — the in-app Browser
-  tool can't reach local/private IPs at all (sandboxed separately), and
-  a direct `Test-NetConnection` from this machine's own wired Ethernet
-  interface (same 192.168.1.0/24 subnet as the hub) got
-  `TcpTestSucceeded: False` / `PingSucceeded: False` — not even ICMP
-  reaches the hub. Given the hub's current Wi-Fi network already
-  doesn't answer ICMP pings at all (see the "Amira_Guest" findings
-  elsewhere in this doc) and is already an open question about whether
-  it's meant to be a long-term guest network, this smells like the same
-  underlying issue (guest-network client/AP isolation is a common
-  router feature, and would explain both symptoms) rather than a bug in
-  the server itself — but that's a hypothesis, not confirmed. **Needs
-  testing directly from a phone/PC actually on the hub's Wi-Fi
-  network** before considering this fully done.
+- **Reachability: confirmed broken, and the guest-network-isolation
+  hypothesis is confirmed WRONG.** This dev machine couldn't reach the
+  hub's IP at all (not even ICMP — see the `Test-NetConnection` result
+  below), which looked like it might be guest-network client isolation.
+  User then tested directly and ruled that out: **unreachable from the
+  guest network, from the primary/main network, AND from the user's own
+  PC** — not just this dev machine. Isolation between guest and primary
+  networks can't explain a failure that also happens on the primary
+  network from the user's own machine. Something is actually wrong,
+  not just a network-policy restriction. Not investigated further this
+  session — moved to the backlog below per explicit instruction.
+  `Test-NetConnection` evidence kept for reference: `TcpTestSucceeded:
+  False` / `PingSucceeded: False` from this machine's wired Ethernet
+  (192.168.1.55, same /24 as the hub's 192.168.1.132).
 
 ### Next session should start here
-1. **Try the web dashboard from an actual phone/PC on the hub's Wi-Fi**
-   (`http://<hub IP>/`, shown by the `status` console command) — not yet
-   confirmed reachable from anything (see above); likely the same
-   guest-network isolation issue as item 2 below.
+1. **Debug the web dashboard being unreachable from everything** — see
+   the "Backlog" section below for what's already known (confirmed NOT
+   a guest-network isolation issue: fails from guest, primary, AND the
+   user's own PC) and where to start looking next.
 2. **Visually check the reworked Home/Phones tiles** on the physical
    screen (see above) and redo BLE distance calibration with a phone
    truly 1m away.

@@ -128,11 +128,13 @@ phones calib reset ble|wifi           # undo a bad calibration, back to the defa
   selftest`, `motion <seconds>`): live diagnostics — packet rates, RSSI,
   per-device detail, a self-test against known-good captured data. `status`
   prints the web dashboard's URL once the hub is connected.
-- **Web dashboard**: same live data (motion, presence, nearby devices,
-  packet rates) in a browser, from any device on the hub's own Wi-Fi
-  network — no app, no login. Point a browser at `http://<hub's IP>/`
-  (shown by `status`). Local-network-only by design; see
-  `firmware/sense/main/web_status.c`'s header comment.
+- **Web dashboard** (`http://<hub's IP>/`, shown by `status`): same live
+  data as the display, meant to be reachable from any device on the
+  hub's own Wi-Fi network — no app, no login, local-network-only by
+  design (see `firmware/sense/main/web_status.c`'s header comment). The
+  server itself runs and the hub stays healthy, but **it's not actually
+  reachable yet** from anything tested (guest network, primary network,
+  or a PC) — see `docs/boards.md`'s Backlog before relying on this.
 
 ## Known limitations
 

@@ -98,14 +98,17 @@ otherwise ask the user rather than re-deriving the architecture from scratch.
   visually confirmed on the physical round screen (no camera/simulator
   available).
 - **Web status dashboard**: the hub serves a read-only status page
-  (`web_status.c`, `esp_http_server`) at `http://<hub IP>/` — same live
-  data as the display's tiles, reachable from any device on the hub's
-  own Wi-Fi (local-network-only by design, no auth/TLS). Its httpd task
-  runs at `tskIDLE_PRIORITY+1`, not the component's own default
-  (`+5`) — the default was verified live to starve `ping_gw` and
-  ESP-NOW badly enough to drop the display's link; keep it low if this
-  file is touched again. Reachability from an actual phone/PC on the
-  hub's network isn't confirmed yet — see docs/boards.md.
+  (`web_status.c`, `esp_http_server`) at `http://<hub IP>/`, meant to
+  be reachable from any device on the hub's own Wi-Fi
+  (local-network-only by design, no auth/TLS) — same live data as the
+  display's tiles. Its httpd task runs at `tskIDLE_PRIORITY+1`, not the
+  component's own default (`+5`) — the default was verified live to
+  starve `ping_gw` and ESP-NOW badly enough to drop the display's link;
+  keep it low if this file is touched again. **Currently unreachable
+  from everything tested** (guest network, primary network, the user's
+  own PC) despite the server and hub both being healthy — ruled out
+  guest-network isolation as the cause; root cause not yet found — see
+  docs/boards.md's Backlog for next debugging steps.
 
 ## Hub↔display link (the "second sensing node")
 
