@@ -846,19 +846,21 @@ of these by the user on 2026-09-14:
   link on this network; an AP-frame-arrival liveness check would cover it.
 - **Never use `run_in_background` for serial captures** on this machine
   — it launches duplicate Python processes that fight over the port.
-- **Still to validate**: a genuine deliberate walk-by hasn't actually
-  happened yet — the 2026-09-15 "motion 25" session turned out to be
-  the user sitting still with a fan running near the hub's antenna
-  (see the correction section above), not a walk-by. That session did
-  surface real open questions (is S1 triggering on fan-induced antenna
-  vibration rather than human motion? is `MOTION_SCORE_DELTA_RANGE_S3`
-  wrong due to a sample-rate measurement artifact, confirmed in the
-  code?) but didn't validate motion detection against real walking.
-  Needs, in order: an empty-room fan-off baseline, then a real walk-by,
-  then (once S1's baseline noise is understood) a walk-by close to
+- **Still to validate**: a genuine deliberate walk-by hasn't happened
+  yet. The empty-room, fan-off baseline (2026-09-15, see above) found
+  MOTION still fires with nobody present and no fan — 2 crossings in
+  30s, once S1-driven, once S3-alone — so this isn't just the fan, and
+  is a real open reliability question (P1 was expected to be "very
+  reliable"; a real false-positive rate in a clean room would undercut
+  that). Needs, in order: a longer (several-minute) clean baseline to
+  actually quantify the false-positive rate, then a real deliberate
+  walk-by, then (once baseline noise is understood) a walk-by close to
   DISP-1 specifically to isolate S3 before touching
-  `MOTION_SCORE_DELTA_RANGE_S3`. Presence and the fusion policy are
-  still untested.
+  `MOTION_SCORE_DELTA_RANGE_S3` (likely wrong regardless — see the
+  sample-rate math confirmed in `wifeel_csi_stream_get_fast_jitter()` —
+  but the right value needs real data, and `MOTION_ENTER_SCORE`/
+  `FLOOR_CREEP_ALPHA` may also need a look). Presence and the fusion
+  policy are still untested.
 - **BLE calibration**: done for the Samsung phone specifically
   (`phones calib ble 30 samsung`, 2026-09-15 — see the vendor-filter
   section above). Other vendors (Apple, Google, etc.) are still on the
@@ -922,6 +924,45 @@ the hub's external antenna**. Both change the read on that data:
   see whether these MOTION episodes were the fan, then a real deliberate
   walk-by under clean conditions.
 
+## Fan-off empty-room baseline: MOTION still fires — the fan wasn't the (sole) cause (2026-09-15, later still)
+
+`motion 30`, fan off, room empty (user confirmed both). Real result:
+
+- **MOTION still fired twice** in 30s with nobody in the room and no
+  fan: score=45 (S1=45, S3=11 — S1-driven, same pattern as before) and,
+  ~10s later, **score=49 with S1=0 and S3=49** — the first time in any
+  capture this session that S3 alone crossed the enter threshold with
+  S1 essentially flat. **This rules out "it's just the fan shaking the
+  antenna" as the full explanation** — the fan being off didn't stop
+  MOTION from firing, and this time it wasn't even always the same
+  stream doing it.
+- Outside those two episodes, both streams' scores are visibly noisy
+  even while correctly reporting `still` — S3 repeatedly touched the
+  high 20s/low-to-mid 30s (30, 39, 26, 33, 31, 36, 38, 35) and S1
+  similarly bounced through the high teens/20s/low 30s, all under the
+  40 enter threshold but clearly not a flat, quiet floor either. **2
+  threshold-crossings in a 30s empty-room sample is a real, non-trivial
+  false-positive rate** if it holds up — could easily be ~1 spurious
+  MOTION every 10-20s sustained, though n=1 short sample isn't enough
+  to pin down a real rate. A longer (several-minute) empty-room capture
+  is needed to actually quantify it, the same way the very first
+  empty-room baseline test in this doc (10 min, milestone 4) quantified
+  packet rates.
+- Working theory, not yet confirmed: `MOTION_ENTER_SCORE=40` may simply
+  be tuned too low relative to this room/hardware's real baseline
+  jitter variance (ambient Wi-Fi congestion, ADC/thermal noise, minor
+  environmental multipath change from anything in the room — a ceiling
+  fan elsewhere, HVAC, etc., not necessarily the desk fan specifically),
+  or `FLOOR_CREEP_ALPHA` (0.02, tracks the adaptive floor) is too slow
+  to keep the floor caught up with genuine baseline drift, so ordinary
+  fluctuation reads as a "delta" above a stale floor.
+- **This is a real dent in the plan's original "Motion: very reliable"
+  expectation** as currently tuned, in this specific room, until
+  investigated further — not something to gloss over. Needs a longer
+  clean baseline before any threshold change is considered; changing
+  `MOTION_ENTER_SCORE` off a 30s sample would be exactly the kind of
+  under-validated tuning this project has been deliberately avoiding.
+
 ### Next session should start here
 1. **Visually check the reworked Home/Phones tiles** on the physical
    screen (see above) and redo BLE distance calibration with a phone
@@ -929,17 +970,18 @@ the hub's external antenna**. Both change the read on that data:
 2. **Ask about the "Amira_Guest" network**: is the hub meant to be on a
    guest network long-term, or would the main/home network avoid S1's
    no-ICMP-reply limitation (~2-5 pkt/s CSI, AP frames only)?
-3. **An empty-room baseline with the fan off**, to check whether the
-   2026-09-15 "motion 25" session's 5 MOTION episodes (sitting still,
-   fan running near the hub's antenna) were fan-induced antenna
-   vibration rather than anything real — see the correction section
-   above. Then a real deliberate walk-by under clean conditions, then a
-   walk-by close to DISP-1 specifically to isolate S3 before setting a
-   real `MOTION_SCORE_DELTA_RANGE_S3` (still an unvalidated placeholder
-   equal to S1's value — likely wrong regardless, per the sample-rate
-   math confirmed in `wifeel_csi_stream_get_fast_jitter()`, but the
-   right replacement value needs real data) — per-channel validation
-   before any fusion policy changes (explicit user instruction).
+3. **A longer (several-minute) empty-room, fan-off baseline** to
+   actually quantify P1's false-positive rate — the 30s 2026-09-15
+   sample already found 2 MOTION crossings with nobody present and no
+   fan (see above), too short a sample to know if that's ~1 per 15s
+   sustained or a fluke. Then a real deliberate walk-by under clean
+   conditions, then a walk-by close to DISP-1 specifically to isolate
+   S3, before touching `MOTION_ENTER_SCORE`, `FLOOR_CREEP_ALPHA`, or
+   `MOTION_SCORE_DELTA_RANGE_S3` (the latter likely wrong regardless,
+   per the sample-rate math confirmed in
+   `wifeel_csi_stream_get_fast_jitter()` — but the right replacement
+   value needs real data) — per-channel validation before any fusion
+   policy changes (explicit user instruction).
 4. Redo empty-room presence calibration and validate
    `PRESENCE_WANDER_THRESHOLD_S1`/`_S3` (still placeholders) against a
    real "person sitting still nearby" test, one stream at a time.
