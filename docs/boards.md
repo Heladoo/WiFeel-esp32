@@ -846,13 +846,19 @@ of these by the user on 2026-09-14:
   link on this network; an AP-frame-arrival liveness check would cover it.
 - **Never use `run_in_background` for serial captures** on this machine
   — it launches duplicate Python processes that fight over the port.
-- **Still to validate**: P1 motion's enter/exit behavior is now
-  confirmed working live against a real walk-by (2026-09-15, see the
-  live walk-by section above) — but that test doesn't isolate S1 from
-  S3 (S1 dominated every episode; unclear if that's path geometry or a
-  real sensitivity gap). Needs a walk-by close to DISP-1 specifically
-  before touching `MOTION_SCORE_DELTA_RANGE_S3` (still a placeholder).
-  Presence and the fusion policy are still untested.
+- **Still to validate**: a genuine deliberate walk-by hasn't actually
+  happened yet — the 2026-09-15 "motion 25" session turned out to be
+  the user sitting still with a fan running near the hub's antenna
+  (see the correction section above), not a walk-by. That session did
+  surface real open questions (is S1 triggering on fan-induced antenna
+  vibration rather than human motion? is `MOTION_SCORE_DELTA_RANGE_S3`
+  wrong due to a sample-rate measurement artifact, confirmed in the
+  code?) but didn't validate motion detection against real walking.
+  Needs, in order: an empty-room fan-off baseline, then a real walk-by,
+  then (once S1's baseline noise is understood) a walk-by close to
+  DISP-1 specifically to isolate S3 before touching
+  `MOTION_SCORE_DELTA_RANGE_S3`. Presence and the fusion policy are
+  still untested.
 - **BLE calibration**: done for the Samsung phone specifically
   (`phones calib ble 30 samsung`, 2026-09-15 — see the vendor-filter
   section above). Other vendors (Apple, Google, etc.) are still on the
@@ -872,33 +878,49 @@ of these by the user on 2026-09-14:
   ~90-100 pkt/s afterward, not confirmed as an ongoing problem — worth
   watching if it recurs, not worth chasing on a single occurrence.
 
-## Live walk-by test: P1 motion confirmed working, S1 dominates over S3 (2026-09-15, later still)
+## CORRECTION: the "walk-by" wasn't a walk-by, and a fan was running (2026-09-15, later still)
 
-`motion 25` streamed while the user walked past both boards. Real
-result, not just "it worked":
+The `motion 25` capture above was mischaracterized. The user clarified
+afterward: **they did not walk or move significantly — they were
+sitting still**, and **a fan running in the room was visibly shaking
+the hub's external antenna**. Both change the read on that data:
 
-- **5 separate MOTION episodes fired and cleared correctly** within the
-  25s window — fused score crossed the 40 enter threshold each time
-  (peaks: 68, 67, 60, 43, 51) and dropped back below the 20 exit
-  threshold and returned to `still` every time, no stuck flag, no missed
-  walk-by. P1's core enter/exit behavior is validated working end to end
-  against a real person, not just synthetic/idle data.
-- **But S1 drove every single one of them.** S1's score hit 40-68 in
-  every episode; S3 stayed in the 0-24 range throughout the *entire*
-  capture, including during confirmed motion, and never independently
-  crossed the 40 enter threshold on its own. If S1 were unavailable, this
-  same walk-by would likely not have triggered MOTION at all on S3 alone
-  with the current threshold.
-- This is real S3-specific data the project didn't have before
-  (`MOTION_SCORE_DELTA_RANGE_S3` has been an unvalidated placeholder,
-  copied from S1, since motion.c was written) — but it's **not
-  conclusive on its own** about whether the placeholder needs changing:
-  this walk-by's path wasn't controlled for distance to each board
-  specifically (HUB-1 and DISP-1 sit on two sides of the same desk), so
-  S1 dominating could mean the path passed closer to the router than to
-  the display, rather than S3 genuinely being less sensitive. A path
-  deliberately close to DISP-1 (and far from the router) is needed to
-  isolate the two before touching `MOTION_SCORE_DELTA_RANGE_S3`.
+- The 5 MOTION episodes (S1 peaks 68, 67, 60, 43, 51) happened with
+  no deliberate human motion at all. That's not evidence P1 correctly
+  detects walking — it's evidence something is crossing the enter
+  threshold under near-idle conditions, and the antenna-shake is the
+  leading suspect, not yet confirmed. This bears directly on the
+  already-open "S1-alone-triggers-MOTION fusion policy question" below
+  — new evidence for that question, not a resolution of it.
+- **Checked whether antenna vibration could explain S1 >> S3 specifically**:
+  it's NOT simply "S1's antenna shakes and S3's doesn't" — confirmed by
+  reading `csi_mgr.c`: both streams are captured through the exact same
+  physical radio/antenna on the hub (`esp_wifi_set_csi_rx_cb()` is
+  registered once; S1 vs S3 is just which peer's MAC a given incoming
+  CSI frame matches). If the hub's antenna is genuinely being shaken,
+  it should perturb both streams' reception somewhat — S1 (router link,
+  weaker/longer, more multipath-dependent) plausibly more than S3
+  (display link, strong/close per motion.c's own comment), but this is
+  a physical hypothesis, not measured — an empty-room baseline with the
+  fan on vs off would confirm or rule it out directly.
+- **Checked the user's recalled sample-rate explanation against the
+  actual code** (`wifeel_csi.c`'s `wifeel_csi_stream_get_fast_jitter()`):
+  the metric is `fabsf(mean_amp - prev_mean_amp)`, a raw difference
+  between *consecutive samples*, never normalized by the time between
+  them. S3 samples at ~100Hz vs S1's ~3-4Hz (~25x denser, motion.c's own
+  comment) — consecutive S3 samples are ~25x closer together in time, so
+  for any real signal that varies smoothly over that timescale (human
+  motion, breathing, or antenna vibration), the raw per-sample delta is
+  mechanically smaller at a higher sample rate even for identical
+  underlying physical motion. This is a real, code-confirmed measurement
+  artifact, independent of the fan/sitting-still question — it's a solid
+  reason `MOTION_SCORE_DELTA_RANGE_S3` being copied straight from S1 is
+  probably wrong, though the exact correction factor isn't derivable
+  from one uncontrolled session.
+- **Next step, before touching any constant**: an empty-room baseline
+  with the fan OFF (and ideally one with it back ON, for comparison) to
+  see whether these MOTION episodes were the fan, then a real deliberate
+  walk-by under clean conditions.
 
 ### Next session should start here
 1. **Visually check the reworked Home/Phones tiles** on the physical
@@ -907,13 +929,17 @@ result, not just "it worked":
 2. **Ask about the "Amira_Guest" network**: is the hub meant to be on a
    guest network long-term, or would the main/home network avoid S1's
    no-ICMP-reply limitation (~2-5 pkt/s CSI, AP frames only)?
-3. **A walk-by close to DISP-1 specifically** (not just a general
-   walk-by — the 2026-09-15 test confirmed P1 works end to end but was
-   S1-dominated throughout, inconclusive about S3's real sensitivity)
-   to isolate S3 before setting a real `MOTION_SCORE_DELTA_RANGE_S3`
-   (still an unvalidated placeholder equal to S1's value) — per-channel
-   validation before any fusion policy changes (explicit user
-   instruction).
+3. **An empty-room baseline with the fan off**, to check whether the
+   2026-09-15 "motion 25" session's 5 MOTION episodes (sitting still,
+   fan running near the hub's antenna) were fan-induced antenna
+   vibration rather than anything real — see the correction section
+   above. Then a real deliberate walk-by under clean conditions, then a
+   walk-by close to DISP-1 specifically to isolate S3 before setting a
+   real `MOTION_SCORE_DELTA_RANGE_S3` (still an unvalidated placeholder
+   equal to S1's value — likely wrong regardless, per the sample-rate
+   math confirmed in `wifeel_csi_stream_get_fast_jitter()`, but the
+   right replacement value needs real data) — per-channel validation
+   before any fusion policy changes (explicit user instruction).
 4. Redo empty-room presence calibration and validate
    `PRESENCE_WANDER_THRESHOLD_S1`/`_S3` (still placeholders) against a
    real "person sitting still nearby" test, one stream at a time.
