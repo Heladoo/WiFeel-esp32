@@ -76,6 +76,13 @@ static const float s_path_loss_n = PATH_LOSS_EXPONENT_DEFAULT;
 static bool s_calibrating;
 static wifeel_dev_source_t s_calib_source;
 static int64_t s_calib_deadline_us;
+/* WIFEEL_VENDOR_COUNT = "no filter, take the strongest entry regardless
+ * of vendor" — the original behavior. Anything else restricts the
+ * "strongest wins" search to just that vendor, for calibrating against
+ * one specific device on a desk with several BLE sources at once (seen
+ * live: an unfiltered calibration grabbed a different, stronger nearby
+ * device instead of the one actually being held at 1m). */
+static wifeel_vendor_t s_calib_vendor_filter;
 
 uint16_t devices_id_hash(const uint8_t mac[6])
 {
@@ -227,6 +234,9 @@ static void check_calibration(void)
     for (int i = 0; i < MAX_DEVICES; i++) {
         device_slot_t *s = &s_devices[i];
         if (!s->in_use || s->source != s_calib_source || !s->rssi_ema_valid) {
+            continue;
+        }
+        if (s_calib_vendor_filter != WIFEEL_VENDOR_COUNT && s->vendor != s_calib_vendor_filter) {
             continue;
         }
         if (!best || s->rssi_ema > best->rssi_ema) {
@@ -398,7 +408,14 @@ void devices_get_summary(wifeel_msg_devices_t *out)
 
 esp_err_t devices_calibrate_start(wifeel_dev_source_t source, uint32_t duration_ms)
 {
+    return devices_calibrate_start_filtered(source, duration_ms, WIFEEL_VENDOR_COUNT);
+}
+
+esp_err_t devices_calibrate_start_filtered(wifeel_dev_source_t source, uint32_t duration_ms,
+                                            wifeel_vendor_t vendor_filter)
+{
     s_calib_source = source;
+    s_calib_vendor_filter = vendor_filter;
     s_calib_deadline_us = esp_timer_get_time() + (int64_t)duration_ms * 1000;
     s_calibrating = true;
     return ESP_OK;

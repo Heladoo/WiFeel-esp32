@@ -1,6 +1,7 @@
 #include "console_cmds.h"
 
 #include <string.h>
+#include <strings.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <inttypes.h>
@@ -241,10 +242,25 @@ static const char *dev_source_name(wifeel_dev_source_t s)
     return s == WIFEEL_DEV_SRC_BLE ? "BLE" : "WiFi";
 }
 
+/* For `phones calib ble|wifi <s> [vendor]` — restricts calibration to one
+ * vendor's entries (see devices_calibrate_start_filtered()'s doc comment
+ * for why: multiple BLE sources on one desk otherwise means calibration
+ * can lock onto whichever *other* device is strongest, not the one
+ * actually being held at 1m). Returns false for an unrecognized name. */
+static bool parse_vendor_name(const char *s, wifeel_vendor_t *out)
+{
+    if (strcasecmp(s, "apple") == 0)          { *out = WIFEEL_VENDOR_APPLE; return true; }
+    if (strcasecmp(s, "samsung") == 0)        { *out = WIFEEL_VENDOR_SAMSUNG; return true; }
+    if (strcasecmp(s, "google") == 0)         { *out = WIFEEL_VENDOR_GOOGLE; return true; }
+    if (strcasecmp(s, "microsoft") == 0)      { *out = WIFEEL_VENDOR_MICROSOFT; return true; }
+    if (strcasecmp(s, "other") == 0)          { *out = WIFEEL_VENDOR_OTHER; return true; }
+    return false;
+}
+
 static int phones_calib(int argc, char **argv)
 {
     if (argc < 3) {
-        printf("usage: phones calib ble|wifi <seconds>  |  phones calib reset ble|wifi\n");
+        printf("usage: phones calib ble|wifi <seconds> [vendor]  |  phones calib reset ble|wifi\n");
         return 1;
     }
     if (strcmp(argv[2], "reset") == 0) {
@@ -264,19 +280,33 @@ static int phones_calib(int argc, char **argv)
     } else if (strcmp(argv[2], "wifi") == 0) {
         source = WIFEEL_DEV_SRC_WIFI;
     } else {
-        printf("usage: phones calib ble|wifi <seconds>  |  phones calib reset ble|wifi\n");
+        printf("usage: phones calib ble|wifi <seconds> [vendor]  |  phones calib reset ble|wifi\n");
         return 1;
     }
     uint32_t duration_s = (argc >= 4) ? (uint32_t)atoi(argv[3]) : 15;
     if (duration_s == 0) {
         duration_s = 15;
     }
+    wifeel_vendor_t vendor_filter = WIFEEL_VENDOR_COUNT;
+    if (argc >= 5) {
+        if (!parse_vendor_name(argv[4], &vendor_filter)) {
+            printf("unrecognized vendor '%s' — try apple|samsung|google|microsoft|other\n", argv[4]);
+            return 1;
+        }
+    }
     if (source == WIFEEL_DEV_SRC_BLE && ble_scan_get_duty() == 0) {
         printf("warning: BLE scanning is paused (phones duty 0) — calibration won't see anything\n");
     }
-    devices_calibrate_start(source, duration_s * 1000);
-    printf("calibrating %s distance for %" PRIu32 " s — hold the reference device ~1m from the hub\n",
-           dev_source_name(source), duration_s);
+    devices_calibrate_start_filtered(source, duration_s * 1000, vendor_filter);
+    if (vendor_filter == WIFEEL_VENDOR_COUNT) {
+        printf("calibrating %s distance for %" PRIu32 " s — hold the reference device ~1m from the hub "
+               "(picks whichever tracked device ends up strongest — if others are nearby, pass a vendor "
+               "name to target one specifically)\n", dev_source_name(source), duration_s);
+    } else {
+        printf("calibrating %s distance for %" PRIu32 " s against %s devices only — "
+               "hold the reference device ~1m from the hub\n",
+               dev_source_name(source), duration_s, argv[4]);
+    }
     return 0;
 }
 
@@ -636,8 +666,8 @@ esp_err_t console_start(void)
     const esp_console_cmd_t phones_cmd = {
         .command = "phones",
         .help = "Nearby phones: summary | raw <s> [min_rssi] | duty <0-100> | "
-                "calib ble|wifi <s> | calib reset ble|wifi | selftest",
-        .hint = "[raw <s> [min_rssi] | duty <pct> | calib ble|wifi <s> | calib reset ble|wifi | selftest]",
+                "calib ble|wifi <s> [vendor] | calib reset ble|wifi | selftest",
+        .hint = "[raw <s> [min_rssi] | duty <pct> | calib ble|wifi <s> [vendor] | calib reset ble|wifi | selftest]",
         .func = &cmd_phones,
     };
     ESP_ERROR_CHECK(esp_console_cmd_register(&phones_cmd));

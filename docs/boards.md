@@ -757,6 +757,35 @@ code-correctness review). Findings and what was done about them:
   took effect, display's `devices rx` log kept arriving normally after
   the protocol change (WIFEEL_MSG_STATE grew by one byte).
 
+## BLE calibration against a specific phone, and why the first live attempt failed (2026-09-15, later)
+
+User moved the Samsung phone close and asked to calibrate. First
+attempt (`phones calib ble 30`, no filter) **locked onto the wrong
+device**: with several BLE sources active on the same desk (Google,
+Microsoft, Samsung, unclassified), calibration always takes whichever
+tracked entry is strongest *at the moment the window ends* — not a
+chosen one. Result: reference became -35.6 dBm (a Google-vendor
+device), and the Samsung's own reading got *worse* (4.3m, up from
+1.8m). Reset immediately (`phones calib reset ble`) once this was
+confirmed from the post-calibration `phones` table.
+
+Root-caused and fixed properly rather than just retrying and hoping:
+added an optional vendor filter to calibration —
+`devices_calibrate_start_filtered()` (`devices.c`) restricts the
+"strongest wins" search to one vendor's tracked entries, exposed as
+`phones calib ble|wifi <s> [vendor]` (`console_cmds.c`, new
+`parse_vendor_name()` for `apple|samsung|google|microsoft|other`).
+`phones calib ble 30 samsung` then correctly used the Samsung's own
+RSSI (-53.0 dBm) as the reference — verified live, Samsung's entry
+reads exactly 1.0m afterward (expected: that reading *is* the new
+reference by construction). Hub rebuilt/reflashed; no display changes
+needed (this is entirely a hub-console feature).
+
+**Takeaway for any future calibration on a desk with multiple BLE
+devices**: always pass the vendor name, e.g. `phones calib ble 30
+samsung` — the unfiltered form is only safe when the target device is
+provably the only/strongest BLE source in range for the whole window.
+
 ## Backlog (deferred while phone detection is built)
 
 Phone detection (BLE + Wi-Fi sniffing, hub only) was prioritized ahead
@@ -777,14 +806,12 @@ of these by the user on 2026-09-14:
 - **Still to validate**: S1 and S3 motion walk-bys (boards sit close on
   one desk, so both should react together), then presence, then the
   fusion policy. `MOTION_SCORE_DELTA_RANGE_S3` is still a placeholder.
-- **Redo BLE distance calibration for real** (`phones calib ble 30`,
-  the actual phone in question held truly 1m from the hub, nothing else
-  closer/stronger during the window). The bad -29.0 dBm reference is
-  already reset to the generic -59.0 dBm default (`phones calib reset
-  ble`, 2026-09-15), which fixed the "unknown" readings, but a generic
-  default still isn't THIS phone's real 1m RSSI — the Samsung phone read
-  3.2m post-reset despite being reported live as <1m away (see the
-  second live-feedback-round section above).
+- **BLE calibration**: done for the Samsung phone specifically
+  (`phones calib ble 30 samsung`, 2026-09-15 — see the vendor-filter
+  section above). Other vendors (Apple, Google, etc.) are still on the
+  generic -59.0 dBm default and would benefit from their own
+  `phones calib ble 30 <vendor>` pass the same way, if/when their
+  distance readings matter.
 - **Visually confirm the reworked Home/Phones tiles on the physical
   screen** — the 2026-09-15 UI pass was verified by build+flash+boot log
   only (no camera/simulator available), not by looking at the round

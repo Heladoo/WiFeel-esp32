@@ -63,6 +63,16 @@ void devices_get_summary(wifeel_msg_devices_t *out);
  * window ends is taken as the 1m reference and saved to NVS.
  */
 esp_err_t devices_calibrate_start(wifeel_dev_source_t source, uint32_t duration_ms);
+
+/** Same as devices_calibrate_start(), but restricts the "strongest wins"
+ *  search to entries classified as `vendor_filter` (pass WIFEEL_VENDOR_COUNT
+ *  for no filter — devices_calibrate_start()'s behavior). For calibrating
+ *  against one specific device on a desk with several BLE sources active
+ *  at once, where an unfiltered calibration can otherwise lock onto
+ *  whichever *other* device happens to be strongest during the window
+ *  instead of the one actually being held at 1m. */
+esp_err_t devices_calibrate_start_filtered(wifeel_dev_source_t source, uint32_t duration_ms,
+                                            wifeel_vendor_t vendor_filter);
 bool devices_calibrate_is_active(void);
 uint32_t devices_calibrate_remaining_ms(void);
 
