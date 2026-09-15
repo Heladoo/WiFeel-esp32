@@ -846,9 +846,13 @@ of these by the user on 2026-09-14:
   link on this network; an AP-frame-arrival liveness check would cover it.
 - **Never use `run_in_background` for serial captures** on this machine
   — it launches duplicate Python processes that fight over the port.
-- **Still to validate**: S1 and S3 motion walk-bys (boards sit close on
-  one desk, so both should react together), then presence, then the
-  fusion policy. `MOTION_SCORE_DELTA_RANGE_S3` is still a placeholder.
+- **Still to validate**: P1 motion's enter/exit behavior is now
+  confirmed working live against a real walk-by (2026-09-15, see the
+  live walk-by section above) — but that test doesn't isolate S1 from
+  S3 (S1 dominated every episode; unclear if that's path geometry or a
+  real sensitivity gap). Needs a walk-by close to DISP-1 specifically
+  before touching `MOTION_SCORE_DELTA_RANGE_S3` (still a placeholder).
+  Presence and the fusion policy are still untested.
 - **BLE calibration**: done for the Samsung phone specifically
   (`phones calib ble 30 samsung`, 2026-09-15 — see the vendor-filter
   section above). Other vendors (Apple, Google, etc.) are still on the
@@ -868,6 +872,34 @@ of these by the user on 2026-09-14:
   ~90-100 pkt/s afterward, not confirmed as an ongoing problem — worth
   watching if it recurs, not worth chasing on a single occurrence.
 
+## Live walk-by test: P1 motion confirmed working, S1 dominates over S3 (2026-09-15, later still)
+
+`motion 25` streamed while the user walked past both boards. Real
+result, not just "it worked":
+
+- **5 separate MOTION episodes fired and cleared correctly** within the
+  25s window — fused score crossed the 40 enter threshold each time
+  (peaks: 68, 67, 60, 43, 51) and dropped back below the 20 exit
+  threshold and returned to `still` every time, no stuck flag, no missed
+  walk-by. P1's core enter/exit behavior is validated working end to end
+  against a real person, not just synthetic/idle data.
+- **But S1 drove every single one of them.** S1's score hit 40-68 in
+  every episode; S3 stayed in the 0-24 range throughout the *entire*
+  capture, including during confirmed motion, and never independently
+  crossed the 40 enter threshold on its own. If S1 were unavailable, this
+  same walk-by would likely not have triggered MOTION at all on S3 alone
+  with the current threshold.
+- This is real S3-specific data the project didn't have before
+  (`MOTION_SCORE_DELTA_RANGE_S3` has been an unvalidated placeholder,
+  copied from S1, since motion.c was written) — but it's **not
+  conclusive on its own** about whether the placeholder needs changing:
+  this walk-by's path wasn't controlled for distance to each board
+  specifically (HUB-1 and DISP-1 sit on two sides of the same desk), so
+  S1 dominating could mean the path passed closer to the router than to
+  the display, rather than S3 genuinely being less sensitive. A path
+  deliberately close to DISP-1 (and far from the router) is needed to
+  isolate the two before touching `MOTION_SCORE_DELTA_RANGE_S3`.
+
 ### Next session should start here
 1. **Visually check the reworked Home/Phones tiles** on the physical
    screen (see above) and redo BLE distance calibration with a phone
@@ -875,8 +907,10 @@ of these by the user on 2026-09-14:
 2. **Ask about the "Amira_Guest" network**: is the hub meant to be on a
    guest network long-term, or would the main/home network avoid S1's
    no-ICMP-reply limitation (~2-5 pkt/s CSI, AP frames only)?
-3. Once the link is stable for a sustained period, redo the S3-focused
-   walk-by test cleanly and set a real `MOTION_SCORE_DELTA_RANGE_S3`
+3. **A walk-by close to DISP-1 specifically** (not just a general
+   walk-by — the 2026-09-15 test confirmed P1 works end to end but was
+   S1-dominated throughout, inconclusive about S3's real sensitivity)
+   to isolate S3 before setting a real `MOTION_SCORE_DELTA_RANGE_S3`
    (still an unvalidated placeholder equal to S1's value) — per-channel
    validation before any fusion policy changes (explicit user
    instruction).
