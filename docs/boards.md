@@ -1048,7 +1048,64 @@ Isolation" / "Wireless Isolation" and disabling it** — not something
 fixable from the firmware side, since the ESP32 code has now been
 shown to work correctly.
 
+## Zigbee → Tuya hub works: an ESP32-C6 appears in the Tuya app, both directions (2026-09-28)
+
+Goal: a remote-viewable status path that avoids the unreachable web
+dashboard (router isolation) and any home-network exposure — piggyback on
+the user's existing Tuya hub + app, whose cloud already handles remote
+access and auth. Full recipe and code in `experiments/zigbee_tuya_probe/`.
+
+**Result, on the display board (DISP-1): it works.** The C6 joins the
+Tuya hub's Zigbee network as an End Device and shows up in the Tuya app as
+a "1 gang touch switch". ESP32→app (a 10 s demo flip shows in the app) and
+app→ESP32 (`HUB WROTE On/Off = …` logged when the user toggles it) both
+verified; hub ACKs every report with ZCL Default Response 0x00; stable
+200+ s continuous.
+
+**I was wrong earlier in this session, twice, and it's worth recording why:**
+- I concluded from Tuya's *gateway-vendor SDK docs* that a hub only accepts
+  devices whose manufacturer/model are on an allowlist compiled into the
+  gateway firmware, and rated the route unlikely. That's what a hub-maker's
+  SDK does; it is not what this hub does. Manufacturer/model were left at
+  the SDK defaults ("ESPRESSIF"/"esp32c6") and the device was adopted anyway.
+  The user pushed back ("if you can't find it yourself maybe you won't be
+  able to develop it?") and was right — the fix was in real community/SDK
+  evidence (espressif/esp-zigbee-sdk issue #752: ESP32-C6 on/off devices
+  with made-up strings adopted by a Tuya gateway), not in vendor docs.
+- The user's own tip (endpoint 1 instead of 10) was correct and consistent
+  with Tuya devices exposing their function on endpoint 1.
+
+**What actually blocked it (three separate things):**
+1. Join failed at the security handshake: `EZB_BDB_STATUS_TCLK_EX_FAILURE`
+   (0x0a), then forced leave → fixed with
+   `ezb_secur_set_tclk_exchange_required(false)`.
+2. Joined-but-invisible: a temperature-sensor endpoint joined the Zigbee
+   network but never surfaced in the app; an **On/Off light** endpoint did.
+3. Probe bugs of my own: after any leave / local reset the search never
+   restarted (the stock example has the same trap), which produced the
+   confusing "silent after ~95 s" runs. A lock-independent heartbeat task
+   proved the chip was never hung (heap flat, uptime ticking) — it was
+   idle. Fixed by re-steering after leave/reset.
+Endpoint 1, On/Off type and TCLK off were changed together, so which subset
+is strictly necessary is unknown (all three are cheap; keep all three).
+
+**Also settled:** ESP32-C6 Zigbee End Device + Wi-Fi STA coexistence is
+documented as stable by Espressif (the "use two chips" warning is for
+gateway/router roles); AP mode can't coexist with Zigbee, which is why this
+belongs on the display (STA-only), not the hub (runs a SoftAP).
+
+**Not done yet:** integrating into the real display firmware (Zigbee stack
+alongside Wi-Fi STA + 100 Hz ping + ESP-NOW + LVGL, no PSRAM — heap and task
+priorities need care given the httpd-priority starvation lesson above), and
+mapping real WiFeel state onto the switch. **NB: DISP-1 is currently running
+the Zigbee probe, not the WiFeel display firmware** — its UI is off until
+one or the other is flashed back.
+
 ### Next session should start here
+0. **Decide the Zigbee integration** (see the section above): what WiFeel
+   state to mirror onto Tuya switch(es), then port the probe into
+   `firmware/display`. Reflash the WiFeel display firmware if not doing it
+   right away — DISP-1 currently runs the probe.
 1. **Check the router's admin settings for AP/client isolation** and
    disable it if present — the on-device self-test (`web selftest`)
    proved the dashboard server itself works correctly, so this is a

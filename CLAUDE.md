@@ -111,6 +111,17 @@ otherwise ask the user rather than re-deriving the architecture from scratch.
   own PC) despite that — the firmware is exonerated, this is now a
   router-config question (leading suspect: Wi-Fi client/AP isolation
   applied network-wide, not just to a guest VLAN) — see docs/boards.md.
+- **Zigbee → Tuya hub route proven, not yet integrated**:
+  `experiments/zigbee_tuya_probe/` (a modified Espressif SDK example) joins
+  the user's Tuya Zigbee hub from the display's ESP32-C6 and shows up in
+  the Tuya app as a switch, both directions working. Needs: End Device
+  role, an **On/Off light** endpoint (a temperature sensor joined but never
+  appeared in the app), endpoint 1, and
+  `ezb_secur_set_tclk_exchange_required(false)`; restart steering after any
+  leave/reset. Zigbee can't coexist with a SoftAP, so it belongs on the
+  display, never the hub. **DISP-1 currently runs this probe, not the
+  WiFeel display firmware** — reflash `firmware/display` to restore the UI.
+  Plan/status in docs/boards.md.
 
 ## Hub↔display link (the "second sensing node")
 
