@@ -10,6 +10,7 @@
 #include "touch.h"
 #include "link.h"
 #include "ui_phones.h"
+#include "zb_tuya.h"
 
 /* Bump on every behavior change — matches firmware/sense's board.h
  * convention (see CLAUDE.md). */
@@ -265,6 +266,10 @@ static void ui_update_task(void *arg)
         uint32_t age_ms = 0;
         bool have = link_get_latest_state(&state, &age_ms);
 
+        /* Mirror onto the Tuya hub (see zb_tuya.h). Same freshness rule the UI
+         * uses below: a hub that's gone quiet isn't fed through as if live. */
+        zb_tuya_update(have && age_ms <= LINK_STALE_MS, &state);
+
         wifeel_msg_devices_t devices;
         uint32_t devices_age_ms = 0;
         bool have_devices = link_get_latest_devices(&devices, &devices_age_ms);
@@ -371,6 +376,13 @@ void app_main(void)
     esp_err_t link_err = link_init();
     if (link_err != ESP_OK) {
         ESP_LOGE(TAG, "link_init failed: %s", esp_err_to_name(link_err));
+    }
+
+    /* After link_init(): Wi-Fi must be up first so the two radios coexist.
+     * Non-fatal — the display's core job (hub link + UI) works without it. */
+    esp_err_t zb_err = zb_tuya_init();
+    if (zb_err != ESP_OK) {
+        ESP_LOGW(TAG, "zb_tuya_init failed: %s (Tuya/Zigbee mirroring disabled)", esp_err_to_name(zb_err));
     }
 
     xTaskCreate(&ui_update_task, "ui_update", 3072, NULL, tskIDLE_PRIORITY + 2, NULL);

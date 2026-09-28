@@ -115,11 +115,13 @@ bool link_get_latest_devices(wifeel_msg_devices_t *out, uint32_t *age_ms_out)
 static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg;
-    (void)data;
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        ESP_LOGW(TAG, "disconnected from hub, retrying");
+        /* The reason code is what distinguishes "hub not found" (201) from an
+         * auth/handshake failure (2, 15, 205...) — it was being discarded. */
+        const wifi_event_sta_disconnected_t *d = data;
+        ESP_LOGW(TAG, "disconnected from hub (reason %d), retrying", d ? d->reason : -1);
         ping_gw_stop();
         esp_wifi_connect();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {

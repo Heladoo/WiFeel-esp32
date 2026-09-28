@@ -4,3 +4,6 @@
 nvs,        data, nvs,       ,         0x6000,
 phy_init,   data, phy,       ,         0x1000,
 factory,    app,  factory,   ,         8M,
+# Zigbee stack's factory-test data partition, as in Espressif's own Zigbee
+# examples (the Zigbee network state itself is stored in "nvs" above).
+zb_fct,     data, fat,       ,         1K,

@@ -1094,18 +1094,82 @@ documented as stable by Espressif (the "use two chips" warning is for
 gateway/router roles); AP mode can't coexist with Zigbee, which is why this
 belongs on the display (STA-only), not the hub (runs a SoftAP).
 
-**Not done yet:** integrating into the real display firmware (Zigbee stack
-alongside Wi-Fi STA + 100 Hz ping + ESP-NOW + LVGL, no PSRAM — heap and task
-priorities need care given the httpd-priority starvation lesson above), and
-mapping real WiFeel state onto the switch. **NB: DISP-1 is currently running
-the Zigbee probe, not the WiFeel display firmware** — its UI is off until
-one or the other is flashed back.
+## Zigbee integrated into the display firmware; display Wi-Fi found deaf (2026-09-28, later)
+
+User chose: mirror motion + presence as switches **and** add a number tile,
+and integrate now. Done in `firmware/display/main/zb_tuya.{c,h}` (hooks in
+`app_main.c`; `esp-zigbee-lib` dependency, `zb_fct` partition, `CONFIG_ZB_ENABLED`
+/`CONFIG_ZB_ZED` in `sdkconfig.defaults`). Endpoints: EP1 On/Off "motion",
+EP2 On/Off "presence" (`presence_state != EMPTY`), EP3 dimmable light whose
+brightness % = motion score. App writes are ignored and the true value is
+pushed back. Phone count is **not** added yet (a 4th endpoint; the one public
+precedent mis-detected a 4-endpoint device — try after 3 is confirmed).
+
+Production behavior differs from the probe on purpose: it **never auto-forgets
+its pairing** (the probe did, which would force a re-pair after any hub
+outage — forgetting is a ~6 s BOOT long-press only); an unpaired display scans
+for a hub in pairing mode for **10 minutes** only (steering is an active scan
+of 16 channels — unbounded scanning would hammer the radio S3's CSI depends
+on), first scan after 8 s, then every 15 s; stack task at priority +3, below
+LVGL (5).
+
+**Verified:** builds with no warnings; paired with the Tuya hub during an app
+scan (PAN 0x8870, channel 11, at t=118 s); rejoins the stored network in
+~1.3 s after a reflash; stayed joined 5+ min; heap flat (168 KB at boot →
+~77 KB after Wi-Fi+LVGL+Zigbee start, then 74.4–75.4 KB, min 73.7 KB — tight,
+no PSRAM, but not trending down).
+**NOT verified:** what the Tuya app shows for the 3-endpoint device (awaiting
+the user's look — in particular whether the dimmer tile renders the score);
+that the tiles mirror real WiFeel state (needs STATE from the hub, i.e. a
+working display Wi-Fi link); Zigbee + Wi-Fi coexistence with a *working*
+link (untestable while the link is down, below).
+
+**Blocker, unresolved, NOT caused by our code: the display's Wi-Fi receiver
+hears nothing.** `link: disconnected from hub (reason 201)` = NO_AP_FOUND, and
+a scan lists **0 APs** — not the hub's `WiFeel-Link`, not the user's router(s).
+Ruled out one by one: our Zigbee changes (control build with Zigbee disabled →
+same); today's code (the last *committed* display firmware, built in a clean
+worktree → same); Espressif's **stock `wifi/scan` example** with none of our
+code → `Total APs scanned = 0`; the hub blocking the display's receiver
+(hub's radio switched off entirely → still 0); stale PHY calibration (NVS
+wiped, full recalibration → still 0). And the antenna/RF path itself is fine:
+the same chip's **802.15.4 receiver works** on that antenna (it found and joined
+the Tuya hub). So it's Wi-Fi RX specifically, on this board, right now — from
+firmware that linked fine days ago. Not yet tried: a **full USB power cycle**
+(unplug ~10 s; `esptool` hard resets keep RTC-domain state), and asking
+whether the display was moved/covered/cased. If it survives a power cycle,
+suspect the board's Wi-Fi front end.
+
+**Hub-side findings from the same session (real bugs, independent of the above):**
+- The hub used ESP-IDF's default *fast scan* (join the first matching AP found
+  sweeping channels 1→13, not the strongest), so on the user's mesh it could
+  land on a −78 dBm node (channel 4) instead of a −54 dBm one (channel 9).
+  `wifi_mgr.c` now sets `WIFI_ALL_CHANNEL_SCAN` + `WIFI_CONNECT_AP_BY_SIGNAL`
+  both when joining **and on the credentials the driver reloads from NVS at
+  boot** (otherwise the old saved fast-scan config would keep being used).
+  Verified once (joined ch 9 at −54 dBm, no send errors). A later reset still
+  ended on the ch-4 AP after briefly trying ch 9 — this makes the strongest AP
+  *preferred*, not guaranteed.
+- **Correction to my earlier httpd-priority diagnosis.** I attributed the hub's
+  `ping_sock: send error` / `esp_now_send ... NO_MEM` starvation to
+  `esp_http_server`'s default priority and called it fixed by dropping it to
+  +1. That same signature has now recurred with the server at +1, while the hub
+  was on the weak −78 dBm AP, and was absent on the −54 dBm AP. So priority is
+  not demonstrated to be the cause; link quality/AP choice is the stronger
+  suspect. +1 stays (cheap, sensible), but don't cite it as the root cause.
+  To separate them properly: httpd at +5 on a strong AP.
+- Separately, the hub's console went completely silent once (no echo, no logs)
+  and needed a reset; cause unknown, not chased.
+- `firmware/display/main/link.c` now logs the disconnect **reason code** (it was
+  being discarded) — that is what turned "keeps disconnecting" into "NO_AP_FOUND".
 
 ### Next session should start here
-0. **Decide the Zigbee integration** (see the section above): what WiFeel
-   state to mirror onto Tuya switch(es), then port the probe into
-   `firmware/display`. Reflash the WiFeel display firmware if not doing it
-   right away — DISP-1 currently runs the probe.
+0. **The display's Wi-Fi is deaf** (section above): full USB power cycle first,
+   then physical checks; the stock scan example is the quickest re-test
+   (`Total APs scanned`). Until it hears APs, nothing that needs the hub link
+   (UI data, S3 CSI, the Tuya tiles' *values*) can be verified. Then confirm
+   what the Tuya app shows for the 3-endpoint device, whether the tiles mirror
+   real state, and the phone-count tile.
 1. **Check the router's admin settings for AP/client isolation** and
    disable it if present — the on-device self-test (`web selftest`)
    proved the dashboard server itself works correctly, so this is a

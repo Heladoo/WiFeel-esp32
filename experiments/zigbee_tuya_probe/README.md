@@ -60,8 +60,12 @@ Needs `espressif/esp-zigbee-lib` ≥ 2.0 (resolved automatically) and
 ESP-IDF ≥ 5.2 (built here on 5.5.5). **Use a short path**: the build nests
 deeply and hit Windows' 250-char object-path limit from a deep scratch dir.
 
-## Not yet done
+## Superseded by the real integration
 
-Integrating this into the display firmware alongside its Wi-Fi STA + ESP-NOW
-+ LVGL load, and mapping real WiFeel state (motion / presence) onto the
-switch instead of the demo 10 s flip. See docs/boards.md.
+This probe has since been ported into `firmware/display/main/zb_tuya.c`
+(three endpoints, real WiFeel state, production pairing behavior — see the
+header comment there and docs/boards.md). Keep this for the minimal
+reproduction; note two probe-only behaviors that the real code deliberately
+does **not** have: auto-factory-reset after 6 failed rejoins (would force a
+re-pair after any hub outage) and unbounded 1 s steering retries (an ~80%
+scan duty cycle that starves Wi-Fi).

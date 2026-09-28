@@ -8,3 +8,5 @@ dependencies:
   lvgl/lvgl:
     version: "^9"
     public: true
+  espressif/esp-zigbee-lib:
+    version: ">=2.0.0"

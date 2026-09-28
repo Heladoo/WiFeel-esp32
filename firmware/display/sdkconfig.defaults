@@ -14,6 +14,13 @@ CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 
 CONFIG_FREERTOS_HZ=1000
 
+# --- Zigbee End Device, to mirror WiFeel state onto the user's Tuya hub (see
+# main/zb_tuya.h). End Device role specifically: Espressif documents Wi-Fi STA
+# + Zigbee End Device coexistence as stable on ESP32-C6 (the "use two chips"
+# warning is for gateway/router roles). ---
+CONFIG_ZB_ENABLED=y
+CONFIG_ZB_ZED=y
+
 # --- LVGL: only the font sizes the plan's UI actually uses (see the UI
 # memory-budget section — no PSRAM on this board, keep font ROM small). ---
 CONFIG_LV_FONT_MONTSERRAT_14=y

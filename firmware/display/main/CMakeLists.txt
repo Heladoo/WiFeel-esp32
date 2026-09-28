@@ -6,6 +6,7 @@ idf_component_register(
         "link.c"
         "ping_gw.c"
         "ui_phones.c"
+        "zb_tuya.c"
     INCLUDE_DIRS "."
     REQUIRES
         "esp_lcd"

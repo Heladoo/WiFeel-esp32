@@ -111,17 +111,26 @@ otherwise ask the user rather than re-deriving the architecture from scratch.
   own PC) despite that — the firmware is exonerated, this is now a
   router-config question (leading suspect: Wi-Fi client/AP isolation
   applied network-wide, not just to a guest VLAN) — see docs/boards.md.
-- **Zigbee → Tuya hub route proven, not yet integrated**:
-  `experiments/zigbee_tuya_probe/` (a modified Espressif SDK example) joins
-  the user's Tuya Zigbee hub from the display's ESP32-C6 and shows up in
-  the Tuya app as a switch, both directions working. Needs: End Device
-  role, an **On/Off light** endpoint (a temperature sensor joined but never
-  appeared in the app), endpoint 1, and
-  `ezb_secur_set_tclk_exchange_required(false)`; restart steering after any
-  leave/reset. Zigbee can't coexist with a SoftAP, so it belongs on the
-  display, never the hub. **DISP-1 currently runs this probe, not the
-  WiFeel display firmware** — reflash `firmware/display` to restore the UI.
-  Plan/status in docs/boards.md.
+- **Zigbee → Tuya hub, integrated into the display firmware**
+  (`firmware/display/main/zb_tuya.c`): the display's C6 joins the user's Tuya
+  hub as a Zigbee End Device and mirrors motion (EP1 switch), presence (EP2
+  switch) and motion score (EP3 dimmer %) so they're viewable remotely in the
+  Tuya app — the app/cloud provide the remote access and auth. Proven first
+  with `experiments/zigbee_tuya_probe/`. What it took: End Device role, an
+  **On/Off light** endpoint (a temperature sensor joined but never appeared in
+  the app), endpoint 1, `ezb_secur_set_tclk_exchange_required(false)`, and
+  restarting steering after any leave/reset. Zigbee can't coexist with a
+  SoftAP, so it belongs on the display, never the hub. Keep its task below
+  LVGL's priority (5). It never auto-forgets pairing (BOOT long-press only)
+  and only scans for a hub in pairing mode for 10 min after boot. Pairs and
+  rejoins fine; **what the app renders and whether the tiles mirror real
+  state are unverified**, because the display's **Wi-Fi receiver currently
+  hears zero APs** (also true of Espressif's stock scan example — not our
+  code). See docs/boards.md.
+- Hub now prefers the **strongest** AP (`WIFI_ALL_CHANNEL_SCAN` + by-signal,
+  in `wifi_mgr.c`), not the first found — the old fast-scan default landed on
+  a −78 dBm mesh node. Don't attribute the hub's send-error/`NO_MEM` starvation
+  to the httpd priority alone (see docs/boards.md's correction).
 
 ## Hub↔display link (the "second sensing node")
 

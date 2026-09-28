@@ -119,6 +119,20 @@ esp_err_t wifi_mgr_init(void)
     ap_config.ap.channel = 0;        /* auto — APSTA locks this to the STA's channel anyway */
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
 
+    /* Credentials persisted from an earlier join are reloaded by the driver at
+     * boot and used for the automatic reconnect — including their scan
+     * settings, which were the default FAST scan (join the FIRST matching AP
+     * found sweeping channels 1..13, not the strongest). On a mesh that made
+     * the hub land on a -78 dBm node on channel 4 instead of a -57 dBm one on
+     * channel 9, and a weak link there is what the hub degrades on. Re-apply
+     * the scan settings to the stored config before Wi-Fi starts. */
+    wifi_config_t saved_sta = {0};
+    if (esp_wifi_get_config(WIFI_IF_STA, &saved_sta) == ESP_OK && saved_sta.sta.ssid[0]) {
+        saved_sta.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+        saved_sta.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &saved_sta));
+    }
+
     /* Power-save off: modem sleep gates both CSI capture and our high-rate
      * ping traffic (see the plan's JOIN mode design). */
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
@@ -139,6 +153,9 @@ esp_err_t wifi_mgr_join(const char *ssid, const char *password, uint32_t timeout
     }
 
     wifi_config_t wifi_config = {0};
+    /* Strongest AP among same-SSID ones, not the first found (see wifi_mgr_init). */
+    wifi_config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    wifi_config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
     strlcpy((char *)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid));
     if (password && password[0]) {
         strlcpy((char *)wifi_config.sta.password, password, sizeof(wifi_config.sta.password));
