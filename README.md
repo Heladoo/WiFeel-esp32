@@ -11,7 +11,7 @@ plus BLE/Wi-Fi scanning. Two ESP32-C6 boards, fixed in one room.
 
 | Feature | State |
 |---|---|
-| **Motion** (P1) | Working, live-tested |
+| **Motion** (P1) | Working; a root-cause fix for empty-room false positives landed 2026-09-28 and is not yet verified on hardware |
 | **Presence** (P2) | Built, calibrates, but thresholds are unvalidated placeholders |
 | **Nearby phone detection** | Working: BLE scan + Wi-Fi client sniff + a "Phones" page on the display |
 | **People count / breathing / rough position** (P3–P5) | Not built |
@@ -120,8 +120,13 @@ phones calib wifi <seconds>  # same, for Wi-Fi-sourced distance estimates
   count, devices confirmed on your Wi-Fi network, and a nearest-first table
   (source, type, vendor, rough range zone) of everything tracked.
 - **Hub console** (`status`, `phones`, `phones raw <seconds>`, `phones
-  selftest`, `motion <seconds>`): live diagnostics — packet rates, RSSI,
-  per-device detail, a self-test against known-good captured data.
+  selftest`, `motion <seconds>`, `probe <dns|arp|none>`): live diagnostics —
+  packet rates, RSSI, per-device detail, a self-test against known-good
+  captured data, and a switchable traffic generator for the router→hub CSI
+  stream.
+
+Host-side tests for the CSI feature pipeline (no board, no ESP-IDF) live in
+`test/host/` — run `./test/host/run.sh`.
 
 ## Known limitations
 
@@ -131,8 +136,14 @@ phones calib wifi <seconds>  # same, for Wi-Fi-sourced distance estimates
   private-address rotation, and miss idle phones that aren't advertising.
 - "Connected to Wi-Fi" detection only sees 2.4GHz traffic (the C6 has no
   5GHz radio) on the hub's own channel.
-- Some networks don't answer ICMP pings, which the hub uses to generate CSI
-  traffic — see `docs/boards.md` for the impact and workarounds.
+- Some networks answer no ICMP, and CSI only comes from frames the hub
+  *receives*, so outgoing pings alone generate nothing. The hub also runs a
+  DNS- or ARP-based traffic generator (`probe`) for this. It matters more than
+  it sounds: below ~20 received frames/sec the CSI pipeline cannot average
+  away measurement noise at all, which dominates the motion false-positive
+  rate. See `docs/boards.md`.
+- Replacing the hub with a XIAO ESP32-S3 for on-device TinyML was assessed and
+  deliberately deferred — see the backlog in `docs/boards.md`.
 
 ## License
 

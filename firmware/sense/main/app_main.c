@@ -1,4 +1,5 @@
 #include <inttypes.h>
+#include <stdint.h>
 #include "esp_log.h"
 #include "esp_system.h"
 #include "nvs_flash.h"
@@ -11,6 +12,7 @@
 #include "wifi_mgr.h"
 #include "csi_mgr.h"
 #include "ping_gw.h"
+#include "net_probe.h"
 #include "motion.h"
 #include "presence.h"
 #include "link.h"
@@ -71,6 +73,16 @@ static void on_wifi_connected(void)
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "ping_gw_start failed: %s", esp_err_to_name(err));
     }
+    /* Outgoing pings alone generate no CSI — S1 only sees frames the AP
+     * sends US, and this network answers no ICMP at all, which is why S1 sat
+     * at 2-5 pkt/s. Run a probe that does get answered alongside it. DNS is
+     * the default guess; `probe arp` switches at runtime if this network
+     * doesn't answer it. See net_probe.h. */
+    err = net_probe_start(NET_PROBE_METHOD_DNS, wifi_mgr_get_sta_netif(), &gw,
+                          NET_PROBE_DEFAULT_INTERVAL_MS);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "net_probe_start failed: %s", esp_err_to_name(err));
+    }
 
     char ssid[WIFEEL_SSID_MAX_LEN + 1] = {0};
     wifi_mgr_get_ap_ssid(ssid, sizeof(ssid)); /* best-effort; wifi_sniff just won't match beacons if this fails */
@@ -109,19 +121,43 @@ static void s1_ping_watchdog_task(void *arg)
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(S1_WATCHDOG_CHECK_INTERVAL_MS));
 
-        if (!ping_gw_is_running()) {
+        if (!ping_gw_is_running() && !net_probe_is_running()) {
             continue; /* not connected yet, or a real disconnect already handled it */
         }
-        if (!ping_gw_has_succeeded()) {
-            continue; /* gateway doesn't answer ICMP on this network — no liveness signal */
+
+        /* Liveness from EITHER source, and only from one that has actually
+         * answered at least once. Keeping that guard is essential: an
+         * unconditional watchdog on a network that answers nothing
+         * force-reconnected every ~8 s forever (docs/boards.md's "Correction:
+         * the ~8s reconnect cycle was our own watchdog"). The probe widens
+         * the coverage rather than relaxing the rule — a network that refuses
+         * ICMP but answers DNS or ARP now HAS a liveness signal, where
+         * before it had none and the watchdog simply stayed asleep. */
+        bool  have_signal = false;
+        uint32_t stalled_ms = UINT32_MAX;
+        const char *via = "";
+
+        if (ping_gw_has_succeeded()) {
+            uint32_t v = ping_gw_ms_since_last_success();
+            if (v < stalled_ms) { stalled_ms = v; via = "ping"; }
+            have_signal = true;
         }
-        uint32_t stalled_ms = ping_gw_ms_since_last_success();
+        if (net_probe_has_succeeded()) {
+            uint32_t v = net_probe_ms_since_last_success();
+            if (v < stalled_ms) { stalled_ms = v; via = net_probe_method_name(net_probe_get_method()); }
+            have_signal = true;
+        }
+
+        if (!have_signal) {
+            continue; /* nothing on this network answers us — no liveness signal */
+        }
         if (stalled_ms < S1_WATCHDOG_STALL_MS) {
             continue;
         }
 
-        ESP_LOGW(TAG, "S1: no successful ping in %" PRIu32 " ms — forcing reconnect", stalled_ms);
+        ESP_LOGW(TAG, "S1: no reply (%s) in %" PRIu32 " ms — forcing reconnect", via, stalled_ms);
         ping_gw_stop();
+        net_probe_stop();
         wifi_mgr_force_reconnect();
     }
 }

@@ -17,6 +17,7 @@
 #include "wifi_mgr.h"
 #include "csi_mgr.h"
 #include "ping_gw.h"
+#include "net_probe.h"
 #include "espnow_rx_test.h"
 #include "motion.h"
 #include "presence.h"
@@ -507,6 +508,75 @@ static int cmd_phones(int argc, char **argv)
     return 0;
 }
 
+/* Sampling geometry behind the fast-jitter metric. Worth printing on every
+ * status: these two numbers are what made S1 and S3 incomparable before the
+ * metric was normalized, and they are how you tell a stream is too sparse to
+ * trust. frames/bucket ~1.0 means no averaging at all (every frame closes its
+ * own 20 Hz grid bucket), so that stream's jitter carries full single-frame
+ * measurement noise. jitter_span well above WIFEEL_CSI_JITTER_INTERVAL_MS
+ * means the stream cannot even resolve the nominal differencing interval. */
+static void print_stream_sampling(const char *label, wifeel_csi_stream_t *stream)
+{
+    float bucket_n = wifeel_csi_stream_get_mean_bucket_n(stream);
+    float span_ms = wifeel_csi_stream_get_jitter_interval_ms(stream);
+    printf("%s sampling: %.2f frames/bucket, jitter_span=%.0f ms (nominal %d), fast_jitter=%.3f\n",
+           label, (double)bucket_n, (double)span_ms,
+           WIFEEL_CSI_JITTER_INTERVAL_MS,
+           (double)wifeel_csi_stream_get_fast_jitter(stream));
+}
+
+static int cmd_probe(int argc, char **argv)
+{
+    if (argc < 2) {
+        printf("usage: probe <dns|arp|none> [interval_ms]\n");
+        printf("Generates traffic the AP must answer, so S1 has received\n");
+        printf("frames to extract CSI from. Watch 'status' afterwards: what\n");
+        printf("matters is S1 pkt/s rising above %d (WIFEEL_CSI_GRID_HZ) —\n",
+               WIFEEL_CSI_GRID_HZ);
+        printf("below that every frame closes its own grid bucket and no\n");
+        printf("noise averaging happens. Current: %s, %.1f replies/s\n",
+               net_probe_method_name(net_probe_get_method()),
+               (double)net_probe_reply_rate());
+        return 0;
+    }
+    net_probe_method_t method;
+    if (!net_probe_method_from_string(argv[1], &method)) {
+        printf("unknown method '%s' (expected dns, arp or none)\n", argv[1]);
+        return 1;
+    }
+    uint32_t interval = NET_PROBE_DEFAULT_INTERVAL_MS;
+    if (argc >= 3) {
+        interval = (uint32_t)strtoul(argv[2], NULL, 10);
+        if (interval == 0) {
+            printf("interval_ms must be > 0\n");
+            return 1;
+        }
+    }
+    if (method == NET_PROBE_METHOD_NONE) {
+        net_probe_stop();
+        printf("probe stopped\n");
+        return 0;
+    }
+    if (!wifi_mgr_is_connected()) {
+        printf("not connected — join a network first\n");
+        return 1;
+    }
+    esp_ip4_addr_t gw = {0};
+    if (wifi_mgr_get_gateway_ip(&gw) != ESP_OK) {
+        printf("gateway IP not available yet\n");
+        return 1;
+    }
+    esp_err_t err = net_probe_start(method, wifi_mgr_get_sta_netif(), &gw, interval);
+    if (err != ESP_OK) {
+        printf("net_probe_start failed: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+    printf("probe started: method=%s interval=%" PRIu32 " ms\n",
+           net_probe_method_name(method), interval);
+    printf("give it ~10 s, then run 'status' and check S1 pkt/s\n");
+    return 0;
+}
+
 static const char *presence_state_name(wifeel_presence_state_t s)
 {
     switch (s) {
@@ -550,17 +620,31 @@ static int cmd_status(int argc, char **argv)
 
     wifeel_msg_features_t feat;
     if (wifeel_csi_stream_get_features(s1, &feat)) {
-        printf(", mean_amp=%.2f wander=%.2f jitter=%.2f rssi=%.1f+-%.1f",
+        printf(", mean_amp=%.2f wander=%.2f jitter_energy=%.2f rssi=%.1f+-%.1f",
                (double)feat.mean_amplitude, (double)feat.wander, (double)feat.jitter_energy,
                (double)feat.rssi_mean, (double)feat.rssi_std);
     } else {
         printf(" (warming up, not enough history yet)");
     }
     printf("\n");
+    print_stream_sampling("S1", s1);
     if (ping_gw_is_running()) {
         printf("S1 gateway ping: %s\n", ping_gw_has_succeeded()
                ? "answering"
-               : "no replies (network doesn't answer ICMP; S1 watchdog inactive)");
+               : "no replies (network doesn't answer ICMP)");
+    }
+    if (net_probe_is_running()) {
+        printf("S1 probe (%s): sent=%" PRIu32 " replies=%" PRIu32 " (%.1f/s) %s\n",
+               net_probe_method_name(net_probe_get_method()),
+               net_probe_send_count(), net_probe_reply_count(),
+               (double)net_probe_reply_rate(),
+               net_probe_has_succeeded() ? "" : "-- NO REPLIES, try 'probe arp'");
+    } else {
+        printf("S1 probe: not running ('probe dns' to start)\n");
+    }
+    if (!ping_gw_has_succeeded() && !net_probe_has_succeeded()) {
+        printf("           nothing on this network answers us: S1 watchdog inactive "
+               "(by design) and S1 CSI is limited to ambient AP frames\n");
     }
 
     printf("motion:    fused=%u flag=%s  (S1 score=%u jitter=%.2f floor=%.2f, S3 score=%u jitter=%.2f floor=%.2f)\n",
@@ -570,6 +654,7 @@ static int cmd_status(int argc, char **argv)
 
     wifeel_csi_stream_t *s3 = csi_mgr_get_stream(WIFEEL_STREAM_DISPLAY_TO_HUB);
     printf("S3 (display->hub): %.1f pkt/s\n", (double)wifeel_csi_stream_get_pkt_rate(s3));
+    print_stream_sampling("S3", s3);
 
     if (presence_is_calibrating()) {
         printf("presence:  calibrating (%" PRIu32 " s remaining)\n",
@@ -622,6 +707,14 @@ esp_err_t console_start(void)
         .func = &cmd_status,
     };
     ESP_ERROR_CHECK(esp_console_cmd_register(&status_cmd));
+
+    const esp_console_cmd_t probe_cmd = {
+        .command = "probe",
+        .help = "Switch the S1 traffic generator: probe <dns|arp|none> [interval_ms]",
+        .hint = NULL,
+        .func = &cmd_probe,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&probe_cmd));
 
     const esp_console_cmd_t sniff_cmd = {
         .command = "sniff",

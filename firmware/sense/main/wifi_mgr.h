@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include "esp_err.h"
 #include "esp_netif_ip_addr.h"
+#include "esp_netif.h"   /* esp_netif_t, for wifi_mgr_get_sta_netif() */
 
 #ifdef __cplusplus
 extern "C" {
@@ -90,6 +91,11 @@ bool wifi_mgr_is_connected(void);
 esp_err_t wifi_mgr_get_ap_bssid(uint8_t bssid_out[6]);
 esp_err_t wifi_mgr_get_ap_channel(uint8_t *channel_out);
 esp_err_t wifi_mgr_get_gateway_ip(esp_ip4_addr_t *gw_out);
+
+/** The STA-side netif, for callers that need to reach the network stack
+ *  directly (net_probe.c's ARP method, and its DNS-server lookup). NULL
+ *  before wifi_mgr_init(). */
+esp_netif_t *wifi_mgr_get_sta_netif(void);
 
 /** Copies the connected network's SSID (NUL-terminated) into `out`, which
  *  must be at least 33 bytes (32 + NUL, the 802.11 SSID max). */

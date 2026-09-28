@@ -38,6 +38,26 @@ extern "C" {
  *  underlying PHY reports (HT20 vs HE20 differ). */
 #define WIFEEL_CSI_SUBCARRIER_GROUPS 8
 
+/** Wall-clock interval the fast-jitter metric differences amplitude over.
+ *  Deliberately a fixed span rather than "whatever gap the last two samples
+ *  happened to have" — that is what makes streams running at wildly
+ *  different packet rates (S1 ~3 pkt/s vs S3 ~100 pkt/s) produce comparable
+ *  numbers. See wifeel_csi_stream_get_fast_jitter(). 250 ms is short enough
+ *  to react to a walk-by inside one motion.c update tick (300 ms) and long
+ *  enough that S1, at 2-5 pkt/s, still has a sample on both ends of it. */
+#define WIFEEL_CSI_JITTER_INTERVAL_MS 250
+
+/** Smoothing time constant of the fast-jitter EMA, in milliseconds.
+ *  Expressed as a time rather than a per-sample alpha so responsiveness is
+ *  the same wall-clock speed at any packet rate. */
+#define WIFEEL_CSI_JITTER_TAU_MS 1000
+
+/** Gap beyond which two amplitude samples are treated as separated by a
+ *  discontinuity (stream stalled, peer reconnected) rather than by a
+ *  measurable interval: the reference is re-seeded and no jitter update is
+ *  made. Generous enough not to trip on a healthy but sparse S1. */
+#define WIFEEL_CSI_JITTER_MAX_INTERVAL_MS 2000
+
 /** One registered CSI source: a physical stream (S1-S4) identified by the
  *  peer's MAC address. Opaque — create with wifeel_csi_stream_init(),
  *  never construct directly (its internal buffers depend on build config). */
@@ -111,26 +131,50 @@ bool wifeel_csi_stream_get_features(const wifeel_csi_stream_t *stream, wifeel_ms
 float wifeel_csi_stream_get_pkt_rate(const wifeel_csi_stream_t *stream);
 
 /**
- * Fast-reacting jitter estimate for motion detection (P1), updated once
- * per real sample rather than over wifeel_csi_stream_get_features()'s
- * multi-sample ring window (at real, sparse CSI arrival rates — a few Hz,
- * not the nominal 20Hz grid — that window can span many seconds, too slow
- * to react to someone walking by).
+ * Fast-reacting jitter estimate for motion detection (P1), updated far more
+ * often than wifeel_csi_stream_get_features()'s multi-sample ring window (at
+ * real, sparse CSI arrival rates — a few Hz, not the nominal 20Hz grid —
+ * that window can span many seconds, too slow to react to someone walking
+ * by).
  *
- * This is an EMA of the change in raw mean amplitude between consecutive
- * samples. A gain-invariant alternative (spatial coefficient of variation
- * across subcarriers, matching francescopace/espectre's documented
- * approach) was tried and found to give zero response to confirmed real
- * motion in live testing on this hardware — see wifeel_csi.c's
- * bucket_finalize_and_push() and docs/boards.md for the full story. This
- * plain amplitude-diff version is the one with actual positive evidence
- * of detecting real walk-by motion; callers needing gain-invariance
- * should track their own adaptive baseline (see motion.c) rather than
- * assume this value is normalized.
+ * UNITS: mean amplitude change per WIFEEL_CSI_JITTER_INTERVAL_MS, smoothed
+ * by an EMA with a WIFEEL_CSI_JITTER_TAU_MS time constant. Both are fixed
+ * wall-clock spans, so the value means the same thing on a 3 pkt/s stream as
+ * on a 100 pkt/s one and the SAME threshold applies to both. That property
+ * is the whole point of this function and was NOT true before: it used to
+ * difference whatever two grid buckets happened to be adjacent, so S1 (one
+ * raw frame every ~330 ms) and S3 (a 5-frame mean every ~50 ms) were
+ * measuring different physical quantities and needed different thresholds
+ * that nobody had data to set. See wifeel_csi.c's bucket_finalize_and_push()
+ * and docs/boards.md.
  *
- * Returns 0 before the first two samples have arrived.
+ * Amplitude is still RAW, not gain-normalized. A gain-invariant alternative
+ * (spatial coefficient of variation across subcarriers, matching
+ * francescopace/espectre's documented approach) was tried and gave zero
+ * response to confirmed real motion on this hardware — see
+ * bucket_finalize_and_push(). Callers wanting gain invariance should track
+ * their own adaptive baseline (see motion.c), which is also what absorbs the
+ * residual per-stream noise offset a sparse stream inevitably carries: with
+ * only ~1 frame per grid bucket, S1 cannot average away measurement noise
+ * the way S3's ~5 frames per bucket does. Fixing the interval equalizes the
+ * SCALE; the adaptive floor handles the remaining OFFSET.
+ *
+ * Returns 0 until at least two samples a full interval apart have arrived.
  */
 float wifeel_csi_stream_get_fast_jitter(const wifeel_csi_stream_t *stream);
+
+/** Mean CSI frames folded into each grid bucket, smoothed (diagnostic).
+ *  ~1.0 means the stream is slower than WIFEEL_CSI_GRID_HZ and every frame
+ *  closes its own bucket with no averaging; >1 means real averaging is
+ *  happening. Surfaced in the hub's `status` output because this number is
+ *  what determines how much measurement noise a stream's jitter carries. */
+float wifeel_csi_stream_get_mean_bucket_n(const wifeel_csi_stream_t *stream);
+
+/** The actual wall-clock span, in ms, of the most recent fast-jitter
+ *  measurement (diagnostic). Should sit at or just above
+ *  WIFEEL_CSI_JITTER_INTERVAL_MS; well above it means the stream is too
+ *  sparse to resolve that interval cleanly. 0 before the first measurement. */
+float wifeel_csi_stream_get_jitter_interval_ms(const wifeel_csi_stream_t *stream);
 
 #ifdef __cplusplus
 }

@@ -3,11 +3,12 @@
  * streams — S1 (router->hub) and S3 (display->hub, over the hub's own
  * SoftAP the display joins — see wifi_mgr.h) — each using
  * wifeel_csi_stream_get_fast_jitter(). See docs/boards.md's CSI findings:
- * real CSI arrives sparsely (a few Hz), so this works off the fast
- * per-sample EMA, not the slower ring-buffer window; and the fast-jitter
- * metric itself is a temporal amplitude-diff, not the gain-invariant
+ * real CSI arrives sparsely (a few Hz), so this works off that fast metric
+ * rather than the slower ring-buffer window; the metric is a temporal
+ * amplitude-diff over a FIXED 250 ms span (not the gain-invariant
  * "turbulence" statistic that was tried and found unreliable on real
- * hardware.
+ * hardware), which is what lets S1 and S3 share one threshold despite
+ * running ~30x apart in packet rate.
  *
  * Each stream gets its own adaptive noise floor (a real motion spike is
  * transient and shouldn't drag the floor up with it; only sustained

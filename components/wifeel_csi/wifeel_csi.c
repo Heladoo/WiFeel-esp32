@@ -12,6 +12,14 @@ static const char *TAG = "wifeel_csi";
 #define GRID_PERIOD_US (1000000u / WIFEEL_CSI_GRID_HZ)
 #define PKT_RATE_WINDOW_US 1000000u
 
+#define JITTER_INTERVAL_US     (WIFEEL_CSI_JITTER_INTERVAL_MS * 1000u)
+#define JITTER_MAX_INTERVAL_US (WIFEEL_CSI_JITTER_MAX_INTERVAL_MS * 1000u)
+#define JITTER_TAU_S           (WIFEEL_CSI_JITTER_TAU_MS / 1000.0f)
+
+/* Smoothing for the mean-frames-per-bucket diagnostic only — never feeds a
+ * detection decision, so a plain per-push alpha is fine here. */
+#define BUCKET_N_ALPHA 0.1f
+
 typedef struct {
     float   rms_amplitude;
     float   group_energy[WIFEEL_CSI_SUBCARRIER_GROUPS];
@@ -41,17 +49,23 @@ struct wifeel_csi_stream {
     float    last_pkt_rate;
     bool     have_first_frame;
 
-    /* Fast, per-sample jitter EMA — reacts within a sample or two,
-     * unlike wifeel_csi_stream_get_features()'s ring-buffer window (see
+    /* Fast jitter EMA — reacts far quicker than
+     * wifeel_csi_stream_get_features()'s ring-buffer window (see
      * wifeel_csi.h's docs: at real (sparse, irregular) arrival rates the
-     * ring can span many seconds, too slow for motion detection). Updated
-     * once per finalized grid bucket, i.e. once per real sample, not on a
-     * fixed timer. Tracks raw mean amplitude — see
-     * bucket_finalize_and_push() for why a gain-invariant alternative was
-     * tried and reverted. */
-    bool     fast_jitter_has_prev;
-    float    fast_jitter_prev_amp;
+     * ring can span many seconds, too slow for motion detection).
+     *
+     * Measured against a REFERENCE sample held until it is at least
+     * JITTER_INTERVAL_US old, rather than against the immediately preceding
+     * bucket — so the differencing span is a fixed wall-clock interval
+     * instead of "one packet gap", whatever the stream's packet rate. See
+     * bucket_finalize_and_push(). Tracks raw mean amplitude; see there too
+     * for why a gain-invariant alternative was tried and reverted. */
+    bool     jitter_has_ref;
+    uint32_t jitter_ref_ts;
+    float    jitter_ref_amp;
     float    fast_jitter_ema;
+    float    jitter_last_interval_ms; /* diagnostic */
+    float    mean_bucket_n;           /* diagnostic */
 
     /* Calibrated empty-room baseline (see wifeel_csi_stream_calibrate_start). */
     float    baseline_amplitude;
@@ -107,7 +121,51 @@ static void ring_push(wifeel_csi_stream_t *s, float rms_amplitude,
     }
 }
 
-static void bucket_finalize_and_push(wifeel_csi_stream_t *s)
+/*
+ * Close the in-progress grid bucket and fold it into the stream's history.
+ * `close_ts` is the radio timestamp (µs) of the frame that ended the bucket.
+ *
+ * Fast jitter: an EMA of how much raw mean amplitude changes across a FIXED
+ * wall-clock span (JITTER_INTERVAL_US), not across "however far apart the
+ * last two buckets happened to be".
+ *
+ * That distinction is the fix for a real, live-observed defect. Buckets only
+ * close when a frame arrives past the grid period, so the gap between
+ * consecutive buckets — and how many frames each one averages — is set by the
+ * stream's packet rate, not by the grid:
+ *
+ *   S3 (~100 pkt/s): frames every ~10 ms, so a bucket closes every ~50 ms
+ *                    holding ~5 frames. Samples are 5-frame MEANS, 50 ms apart.
+ *   S1 (~3 pkt/s):   frames every ~330 ms, always past the 50 ms grid, so
+ *                    every frame closes its own bucket. Samples are SINGLE
+ *                    RAW FRAMES, ~330 ms apart.
+ *
+ * Differencing those directly inflated S1 twice over — measured across a
+ * ~6.6x longer span, and computed on unaveraged frames carrying ~sqrt(5)x
+ * more measurement noise. That is sufficient to explain S1 alone tripping
+ * MOTION in an empty room (docs/boards.md's fan-off baseline) and why
+ * motion.c needed a different, never-derived threshold per stream. Holding a
+ * reference sample until it is a full interval old makes both streams report
+ * "amplitude change per 250 ms", so one threshold serves both.
+ *
+ * The residual noise difference (S1 cannot average what it does not receive)
+ * survives as a per-stream OFFSET, which is exactly what motion.c's adaptive
+ * floor is for. See wifeel_csi.h.
+ *
+ * A gain-invariant spatial statistic (std/mean amplitude across subcarriers —
+ * "turbulence", matching francescopace/espectre's documented ALGORITHMS.md
+ * approach) was tried here and found to give ZERO response to confirmed real
+ * walk-by motion in live hardware testing, while this plain amplitude-diff
+ * approach cleanly detected two separate real walk-bys (score 13->54->18,
+ * then ->42->48) in an equally controlled test — see docs/boards.md. Best
+ * guess why turbulence didn't transfer: it assumes real per-subcarrier data
+ * with deliberate frequency spacing, but WIFEEL_CSI_SUBCARRIER_GROUPS here
+ * are arbitrary contiguous byte-chunks of a mixed-format buffer (see
+ * extract_frame_amplitude()'s SIMPLIFICATION comment) — group variance
+ * doesn't carry the spatial-frequency meaning the technique depends on with
+ * this simplified grouping. Reverted to the empirically-proven approach.
+ */
+static void bucket_finalize_and_push(wifeel_csi_stream_t *s, uint32_t close_ts)
 {
     if (s->bucket_n == 0) {
         return; /* nothing landed in this bucket; skip rather than push a fake zero */
@@ -120,36 +178,48 @@ static void bucket_finalize_and_push(wifeel_csi_stream_t *s)
     int8_t mean_rssi = (int8_t)(s->bucket_sum_rssi / (int32_t)s->bucket_n);
     ring_push(s, mean_amp, mean_group, mean_rssi);
 
-    /* Fast jitter EMA: EMA of the change in raw mean amplitude between
-     * consecutive real samples. Reacts within a sample or two, unlike
-     * wifeel_csi_stream_get_features()'s multi-sample ring window.
-     *
-     * A gain-invariant spatial statistic (std/mean amplitude across
-     * subcarriers — "turbulence", matching francescopace/espectre's
-     * documented ALGORITHMS.md approach) was tried here and found to give
-     * ZERO response to confirmed real walk-by motion in live hardware
-     * testing, while this plain amplitude-diff approach cleanly detected
-     * two separate real walk-bys (score 13->54->18, then ->42->48) in an
-     * equally controlled test — see docs/boards.md. Best guess why
-     * turbulence didn't transfer: it assumes real per-subcarrier data
-     * with deliberate frequency spacing, but WIFEEL_CSI_SUBCARRIER_GROUPS
-     * here are arbitrary contiguous byte-chunks of a mixed-format buffer
-     * (see extract_frame_amplitude()'s SIMPLIFICATION comment) — group
-     * variance doesn't carry the spatial-frequency meaning the technique
-     * depends on with this simplified grouping. Reverted to the
-     * empirically-proven approach; gain-invariance is instead handled by
-     * motion.c's adaptive baseline tracking rather than a normalized
-     * per-sample statistic. alpha=0.35 settles to ~85% of a step change
-     * within about 4 samples — at the ~3-5 Hz real-world rate this
-     * session measured, that's roughly a 1s reaction time, which is what
-     * P1 (motion) needs. */
-    if (s->fast_jitter_has_prev) {
-        float diff = fabsf(mean_amp - s->fast_jitter_prev_amp);
-        const float alpha = 0.35f;
-        s->fast_jitter_ema = alpha * diff + (1.0f - alpha) * s->fast_jitter_ema;
+    s->mean_bucket_n = (s->mean_bucket_n > 0.0f)
+        ? BUCKET_N_ALPHA * (float)s->bucket_n + (1.0f - BUCKET_N_ALPHA) * s->mean_bucket_n
+        : (float)s->bucket_n;
+
+    if (!s->jitter_has_ref) {
+        s->jitter_has_ref = true;
+        s->jitter_ref_ts = close_ts;
+        s->jitter_ref_amp = mean_amp;
+    } else {
+        uint32_t dt_us = ts_delta(close_ts, s->jitter_ref_ts);
+        if (dt_us > JITTER_MAX_INTERVAL_US) {
+            /* Stream stalled or the peer reconnected: the two samples say
+             * nothing about a 250 ms change. Re-seed rather than invent a
+             * number — and leave the EMA alone, so a reconnect can't read as
+             * either a motion spike or an artificially quiet floor. */
+            s->jitter_ref_ts = close_ts;
+            s->jitter_ref_amp = mean_amp;
+        } else if (dt_us >= JITTER_INTERVAL_US) {
+            /* Scale a span that overshot the nominal interval back onto it,
+             * so a sparse stream isn't credited for the extra time. Linear:
+             * over these short spans a body moving through the channel drives
+             * amplitude roughly linearly in time, and the overshoot is small
+             * (~330 ms vs 250 ms on S1) so the choice of exponent barely
+             * matters next to the ~6.6x error it replaces. */
+            float diff = fabsf(mean_amp - s->jitter_ref_amp);
+            float scaled = diff * ((float)JITTER_INTERVAL_US / (float)dt_us);
+
+            /* Time-constant EMA rather than a fixed per-sample alpha: at
+             * 100 pkt/s a fixed alpha smooths over ~200 ms of history, at
+             * 3 pkt/s over ~4 s. Deriving alpha from the elapsed time makes
+             * the reaction speed the same wall-clock ~1 s on both. */
+            float dt_s = (float)dt_us / 1000000.0f;
+            float alpha = 1.0f - expf(-dt_s / JITTER_TAU_S);
+            s->fast_jitter_ema = alpha * scaled + (1.0f - alpha) * s->fast_jitter_ema;
+
+            s->jitter_last_interval_ms = (float)dt_us / 1000.0f;
+            s->jitter_ref_ts = close_ts;
+            s->jitter_ref_amp = mean_amp;
+        }
+        /* dt_us < JITTER_INTERVAL_US: hold the reference and wait. This is
+         * the common path on S3, where ~5 buckets close per interval. */
     }
-    s->fast_jitter_prev_amp = mean_amp;
-    s->fast_jitter_has_prev = true;
 
     if (s->calibrating) {
         s->calib_sum_amp += mean_amp;
@@ -254,7 +324,7 @@ void wifeel_csi_stream_feed(wifeel_csi_stream_t *stream, const wifi_csi_info_t *
 
     /* --- 20 Hz grid bucketing --- */
     if (ts_delta(ts, stream->bucket_start_ts) >= GRID_PERIOD_US) {
-        bucket_finalize_and_push(stream);
+        bucket_finalize_and_push(stream, ts);
         /* Start a fresh bucket at this frame's time rather than stepping
          * bucket_start_ts forward one GRID_PERIOD_US at a time — under
          * normal traffic (>=20 pkt/s) this is equivalent, and it avoids an
@@ -356,6 +426,14 @@ bool wifeel_csi_stream_get_features(const wifeel_csi_stream_t *stream, wifeel_ms
     out->wander = stream->cfg.has_baseline
         ? fabsf(mean_amp - stream->baseline_amplitude)
         : 0.0f; /* no baseline yet: presence.c should treat this as "unknown", not "no motion" */
+    /* NOTE: this carries the same packet-rate dependence that
+     * bucket_finalize_and_push()'s fast jitter was just fixed for — it sums
+     * squared differences between adjacent ring entries, whose spacing is set
+     * by the stream's packet rate. Left as is deliberately: nothing makes a
+     * decision on it (only console_cmds.c's `status` prints it), so it is a
+     * diagnostic whose scale is comparable within one stream over time but
+     * NOT between S1 and S3. Normalize it the same way if it ever feeds a
+     * threshold or a classifier feature vector. */
     out->jitter_energy = (float)(jitter_sq_sum / (n - 1));
 
     for (int g = 0; g < WIFEEL_CSI_SUBCARRIER_GROUPS; g++) {
@@ -386,4 +464,14 @@ float wifeel_csi_stream_get_pkt_rate(const wifeel_csi_stream_t *stream)
 float wifeel_csi_stream_get_fast_jitter(const wifeel_csi_stream_t *stream)
 {
     return stream ? stream->fast_jitter_ema : 0.0f;
+}
+
+float wifeel_csi_stream_get_mean_bucket_n(const wifeel_csi_stream_t *stream)
+{
+    return stream ? stream->mean_bucket_n : 0.0f;
+}
+
+float wifeel_csi_stream_get_jitter_interval_ms(const wifeel_csi_stream_t *stream)
+{
+    return stream ? stream->jitter_last_interval_ms : 0.0f;
 }

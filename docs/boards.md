@@ -17,8 +17,8 @@ Plan this project was built from:
 
 | Label | Role | Board | Chip ID / MAC | Flash | COM port (as of last flash) | Firmware version running |
 |---|---|---|---|---|---|---|
-| HUB-1 | Sensor hub | Seeed XIAO ESP32-C6 (ext. antenna) | ESP32-C6FH4 (QFN32) rev v0.2, MAC `58:e6:c5:10:76:d0` | 4MB embedded | COM9 (native USB-Serial/JTAG, VID_303A&PID_1001) | _not yet flashed_ |
-| DISP-1 | Display + 2nd sensor | Waveshare ESP32-C6-Touch-AMOLED-1.43 | ESP32-C6 (QFN40) rev v0.2, MAC `fc:01:2c:fe:0f:f8` | 16MB external | COM8 (native USB-Serial/JTAG, VID_303A&PID_1001) | _not yet flashed_ |
+| HUB-1 | Sensor hub | Seeed XIAO ESP32-C6 (ext. antenna) | ESP32-C6FH4 (QFN32) rev v0.2, MAC `58:e6:c5:10:76:d0` | 4MB embedded | COM9 (native USB-Serial/JTAG, VID_303A&PID_1001) | custom WiFeel sense firmware; **exact version unrecorded** (this column was never maintained through the 2026-09-14/15 flash cycles). `0.2.0-dev` is built but NOT yet flashed as of 2026-09-28 — record the real version here on the next flash. |
+| DISP-1 | Display + 2nd sensor | Waveshare ESP32-C6-Touch-AMOLED-1.43 | ESP32-C6 (QFN40) rev v0.2, MAC `fc:01:2c:fe:0f:f8` | 16MB external | COM8 (native USB-Serial/JTAG, VID_303A&PID_1001) | custom WiFeel display firmware; **exact version unrecorded**, same reason. Unaffected by the 2026-09-28 changes (it links `wifeel_proto` only, not `wifeel_csi`). |
 
 Identified 2026-09-14 via `python -m esptool --port COMx chip_id` /
 `flash_id` — auto-reset via RTS works cleanly on both units, no manual
@@ -963,38 +963,207 @@ the hub's external antenna**. Both change the read on that data:
   `MOTION_ENTER_SCORE` off a 30s sample would be exactly the kind of
   under-validated tuning this project has been deliberately avoiding.
 
+## ROOT CAUSE: the fast-jitter metric was packet-rate dependent (2026-09-28)
+
+The unresolved P1 problem from the fan-off baseline above — MOTION firing in
+an empty room, S1 dominating, `MOTION_SCORE_DELTA_RANGE_S3` "likely wrong
+regardless" — has a single root cause in `wifeel_csi.c`, now fixed. It is
+worse than the sample-rate reasoning already noted here: there were **two**
+compounding artifacts, not one.
+
+`bucket_finalize_and_push()` is only called when a frame arrives past the
+50 ms grid period, so both the spacing between samples AND how many frames
+each sample averages are set by the stream's packet rate:
+
+| stream | rate | bucket closes every | frames per bucket | what a "sample" is |
+|---|---|---|---|---|
+| S3 | ~100 pkt/s | ~50 ms | ~5 | a 5-frame mean |
+| S1 | ~2-5 pkt/s | ~330 ms | **1** | a single raw frame |
+
+The old metric was `fabsf(mean_amp - prev_mean_amp)` with a fixed EMA alpha,
+normalized by neither. So S1's jitter was inflated twice over: measured across
+a ~6.6x longer span, **and** computed on unaveraged frames carrying ~sqrt(5)x
+more measurement noise. The second half was never written down before.
+
+### Measured, before and after
+
+A host-side harness now lives in `test/host/` (plain gcc, no ESP-IDF, no
+board — it compiles the real `wifeel_csi.c` against stub ESP headers). It
+feeds two streams the *same* synthetic channel at 3 pkt/s and 100 pkt/s, and
+replicates `motion.c`'s scoring exactly. Reproduce with
+`./test/host/run.sh <old-rev>`.
+
+Rate-independence — same physical motion, ratio should be 1.0x:
+
+| case | before | after |
+|---|---|---|
+| motion, noise-free | **6.07x** | **1.17x** |
+| quiet room, noise only | 5.91x | 2.78x |
+| motion + noise | 3.55x | 0.94x |
+
+The 6.07x confirms the predicted ~6.6x interval artifact almost exactly. The
+residual 1.17x is the deliberate linear rescaling of S1's 333 ms span back
+onto the nominal 250 ms. The 2.78x on the noise-only row is the part that
+**cannot** be fixed here: S1 has one frame per bucket, so it has nothing to
+average. That survives as a per-stream offset, which is exactly what
+`motion.c`'s adaptive floor already handles.
+
+Empty-room false positives and walk-by detection, one shared threshold
+(`MOTION_SCORE_DELTA_RANGE` = 2.5):
+
+| per-frame noise | S1 FP/10min | S1 detect | S3 FP/10min | S3 detect |
+|---|---|---|---|---|
+| 0.6% — before | 5 | 10/10 | 0 | **0/10** |
+| 0.6% — after | **0** | 10/10 | 0 | **10/10** |
+| 1.1% — before | 84 | 10/10 | 3 | **1/10** |
+| 1.1% — after | **22** | 10/10 | **0** | **10/10** |
+| 2.2% — before | 143 | 10/10 | 157 | 8/10 |
+| 2.2% — after | **100** | 10/10 | **33** | **10/10** |
+
+**The biggest finding is not the false positives — it is that S3 was nearly
+blind.** 0/10 and 1/10 detections at realistic noise. It only ever "responded"
+at high noise, where it was also false-positiving wildly. That matches the
+note above that S3's score "reads persistently low even during real motion",
+but the magnitude is worse than suspected: S3 was contributing essentially
+nothing to fusion. After the fix it detects 10/10 at every noise level. So
+the second sensing vantage point has, in practice, not been working at all
+until now — and every conclusion drawn from "S1 dominated over S3" was
+measuring this bug, not the room.
+
+### What changed
+
+- `wifeel_csi.c`: jitter is now the amplitude change across a **fixed
+  250 ms wall-clock span** (`WIFEEL_CSI_JITTER_INTERVAL_MS`), held against a
+  reference sample rather than the previous bucket, with a time-constant EMA
+  (`_TAU_MS` = 1000) instead of a fixed per-sample alpha. Gaps beyond
+  `_MAX_INTERVAL_MS` (2 s) re-seed the reference without updating the EMA, so
+  a reconnect reads as neither a motion spike nor an artificially quiet floor.
+- `motion.c`: `MOTION_SCORE_DELTA_RANGE_S1`/`_S3` collapsed into one shared
+  `MOTION_SCORE_DELTA_RANGE`. The never-derived S3 placeholder is gone.
+- `status` now prints, per stream, mean frames/bucket and the actual jitter
+  span. **These two numbers are the tell**: frames/bucket ~1.00 means no
+  averaging at all.
+- `presence.c`'s per-stream split **stays**, and its comment now explains why
+  the motion fix does not apply: `wander` is a level (a mean over the 2 s ring
+  window), not a difference between samples, so it never carried the rate
+  dependence. Its split rests on absolute signal scale alone.
+
+### Still unvalidated on hardware
+
+`MOTION_SCORE_DELTA_RANGE` = 2.5 is carried over from the old S1 value purely
+to keep S1 in the same ballpark while the fix is evaluated. **The metric's
+scale changed** (per-250 ms, not per-packet-gap), so it must be re-derived
+from a fresh empty-room baseline plus deliberate walk-bys before any
+conclusion about the false-positive rate. Everything above is simulation on a
+synthetic channel; it says nothing about whether the amplitude metric tracks
+real human bodies, which only on-device testing establishes.
+
+## S1 packet starvation: quantified, and a traffic generator (2026-09-28)
+
+The sweep below is the other half of the story. Same harness, S1 at various
+rates, noise 1.1%, shared threshold:
+
+| pkt/s | frames/bucket | FP / 10 min | walk-bys |
+|---|---|---|---|
+| 2 | 1.00 | 4 | 10/10 |
+| 3 | 1.00 | 22 | 10/10 |
+| 5 | 1.00 | 10 | 10/10 |
+| 10 | 1.00 | 32 | 10/10 |
+| 20 | 1.00 | 38 | 10/10 |
+| 50 | 3.00 | **1** | 10/10 |
+| 100 | 5.00 | **0** | 10/10 |
+
+(The 2-20 figures bounce around — different random draws, small sample. Do
+not read a trend into them. The regime change at 20 is the mechanism, and it
+is not noise.)
+
+**The crossover is exactly `WIFEEL_CSI_GRID_HZ` (20).** Below it every frame
+closes its own bucket and single-frame noise passes straight through; above
+it, buckets average and the false positives collapse. So S1's 2-5 pkt/s is
+not merely "less data" — it is below the threshold where any noise averaging
+happens at all. That is why the residual S1 false positives above cannot be
+tuned away, and it makes ">20 pkt/s, ideally 50+" a hard requirement rather
+than the plan's aspirational "≥80".
+
+CSI comes from frames the AP sends **us**, so `ping_gw.c`'s outgoing ICMP
+generates nothing by itself on a network that never replies. New
+`net_probe.c` generates traffic that does get answered, with the method
+switchable at runtime because which mechanism a given router answers is not
+knowable in advance:
+
+- `probe dns` (default, started automatically on connect): UDP DNS query for
+  `wifeel-probe.invalid` to the DHCP-provided resolver, falling back to the
+  gateway, every 20 ms. `.invalid` is RFC 2606 reserved, so this can never
+  resolve and never touches a real domain — NXDOMAIN is as useful as a real
+  answer, because what S1 needs is the reply frame, not the record. Querying
+  the same name each time lets a caching forwarder answer locally.
+- `probe arp`: ARP request for the gateway. A gateway that answers no ARP
+  cannot carry IP at all, so this is the most universally-answered option.
+  Undercounts replies (no per-reply callback exists) but is truthful about
+  whether the gateway responds.
+- `probe none`: off.
+
+The S1 watchdog now takes liveness from **either** the ping or the probe, and
+still only from a source that has answered at least once — that guard is what
+stops the permanent reconnect loop documented above. The probe widens
+coverage rather than relaxing the rule: a network that refuses ICMP but
+answers DNS or ARP now *has* a liveness signal where before it had none.
+
+**Untested on hardware.** Which method this network answers, and what S1
+pkt/s actually results, is the first thing to measure. `status` reports
+sent/replies/rate per method plus S1's frames/bucket, so this is a
+five-minute experiment rather than a guess.
+
 ### Next session should start here
-1. **Visually check the reworked Home/Phones tiles** on the physical
-   screen (see above) and redo BLE distance calibration with a phone
-   truly 1m away.
-2. **Ask about the "Amira_Guest" network**: is the hub meant to be on a
-   guest network long-term, or would the main/home network avoid S1's
-   no-ICMP-reply limitation (~2-5 pkt/s CSI, AP frames only)?
-3. **A longer (several-minute) empty-room, fan-off baseline** to
-   actually quantify P1's false-positive rate — the 30s 2026-09-15
-   sample already found 2 MOTION crossings with nobody present and no
-   fan (see above), too short a sample to know if that's ~1 per 15s
-   sustained or a fluke. Then a real deliberate walk-by under clean
-   conditions, then a walk-by close to DISP-1 specifically to isolate
-   S3, before touching `MOTION_ENTER_SCORE`, `FLOOR_CREEP_ALPHA`, or
-   `MOTION_SCORE_DELTA_RANGE_S3` (the latter likely wrong regardless,
-   per the sample-rate math confirmed in
-   `wifeel_csi_stream_get_fast_jitter()` — but the right replacement
-   value needs real data) — per-channel validation before any fusion
-   policy changes (explicit user instruction).
-4. Redo empty-room presence calibration and validate
-   `PRESENCE_WANDER_THRESHOLD_S1`/`_S3` (still placeholders) against a
-   real "person sitting still nearby" test, one stream at a time.
-5. Only after S1 and S3 are independently validated for both motion and
-   presence: revisit the S1-alone-triggers-MOTION fusion policy question
-   from the original baseline.
-6. Phone detection follow-ups (not started): count phones that aren't
+
+**The jitter fix and the S1 probe are both unverified on hardware. Verify
+those first — every motion/presence number recorded before 2026-09-28 was
+measured through the rate-dependence bug.**
+
+1. **Flash and confirm the fix on HUB-1.** `status` should now show, per
+   stream, `frames/bucket` and `jitter_span`. Expect S3 ~5 frames/bucket at
+   250 ms span; S1 ~1.00 frames/bucket until the probe works. Then
+   `phones selftest` (unchanged behaviour expected) and a boot banner showing
+   `fw=0.2.0-dev`.
+2. **Get S1 above 20 pkt/s.** Try `probe dns`, then `probe arp` if DNS gets no
+   replies; watch S1 pkt/s and frames/bucket in `status`. Above 20 pkt/s,
+   frames/bucket should rise above 1.00 and S1's noise floor should drop
+   sharply. If neither method is answered, the fallback is the question in
+   item 3.
+3. **Ask about the "Amira_Guest" network**: is the hub meant to be on a guest
+   network long-term, or would the main/home network avoid the no-reply
+   limitation outright? This is now more important than it looked — see the
+   packet-rate sweep above.
+4. **Re-derive `MOTION_SCORE_DELTA_RANGE` from scratch.** Its scale changed;
+   2.5 is a placeholder carried over so S1 stays in the same ballpark. Take a
+   several-minute empty-room fan-off baseline, then deliberate walk-bys, then
+   a walk-by close to DISP-1 to check S3 specifically — S3 should now actually
+   respond, which it provably did not before. Per-channel validation before
+   any fusion policy change (explicit user instruction).
+5. **Visually check the reworked Home/Phones tiles** on the physical screen,
+   and redo BLE distance calibration with a phone truly 1 m away.
+6. Redo empty-room presence calibration and validate
+   `PRESENCE_WANDER_THRESHOLD_S1`/`_S3` (still placeholders) against a real
+   "person sitting still nearby" test, one stream at a time. Note the motion
+   fix does **not** carry over to these — `wander` is a level, not a
+   difference, so it never had the rate dependence.
+7. Only after S1 and S3 are independently validated for both motion and
+   presence: revisit the S1-alone-triggers-MOTION fusion policy question.
+   Worth rerunning now that S3 is not blind — "S1 dominates" was largely the
+   bug.
+8. **Deferred: replacing the hub with a XIAO ESP32-S3** (dual core, 8 MB
+   PSRAM, vector ISA for TinyML). Assessed 2026-09-28 and parked deliberately:
+   the S3 is the better ML host, but Espressif ranks CSI capability
+   `C5 > C6 > C3 ~= S3 > ESP32`, and the hub is the only board that captures
+   CSI — so it trades sensor quality for compute. Compute was also not the
+   bottleneck; the two fixes above were. Revisit once S1 is above 20 pkt/s and
+   thresholds are re-derived, at which point a fair A/B is possible.
+9. Phone detection follow-ups (not started): count phones that aren't
    Wi-Fi-connected via their probe requests; correlate a phone's BLE and
    Wi-Fi sightings by RSSI-over-time pattern; use the display board as a
    second BLE scanner for better distance/position; a Wi-Fi client
-   vendor/type classifier (OUI-based) so Wi-Fi-sourced table rows can
-   show something other than the generic device icon (all noted as
-   follow-ups in the original plan, still low priority).
+   vendor/type classifier (OUI-based) so Wi-Fi-sourced table rows can show
+   something other than the generic device icon.
 
 ## Known per-unit quirks
 

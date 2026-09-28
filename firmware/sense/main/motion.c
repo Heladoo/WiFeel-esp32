@@ -10,19 +10,32 @@ static const char *TAG = "motion";
 
 #define MOTION_UPDATE_INTERVAL_MS 300
 
-/* How far ABOVE the adaptive floor (see s_floor below) maps to score 100
- * — separate per stream, NOT shared. S1 and S3 arrive at very different
- * real sample rates (S1 ~3-4 Hz vs S3 ~100 Hz — S3 rides the hub<->display
- * SoftAP link, a much stronger/closer connection). The fast-jitter metric
- * measures change BETWEEN CONSECUTIVE SAMPLES, so at 25x the sample rate,
- * consecutive S3 samples are 25x closer together in time and naturally
- * show smaller diffs for the *same* real motion — this is a sampling-rate
- * artifact, not S3 being less sensitive. Using S1's range for S3 was
- * found (live, real hardware) to make S3's score read persistently low
- * even during real motion. Both grounded in live-tested walk-by sessions
- * — see motion.h and docs/boards.md. */
-#define MOTION_SCORE_DELTA_RANGE_S1 2.5f
-#define MOTION_SCORE_DELTA_RANGE_S3 2.5f /* placeholder, pending real S3-specific walk-by data */
+/* How far ABOVE the adaptive floor (see s_floor below) maps to score 100.
+ *
+ * ONE constant, shared by both streams. It used to be two, because
+ * wifeel_csi_stream_get_fast_jitter() differenced whatever two grid buckets
+ * were adjacent: S1 (~3 pkt/s) and S3 (~100 pkt/s) therefore measured
+ * amplitude change over ~330 ms and ~50 ms respectively, and on top of that
+ * S1's samples were single raw frames where S3's were 5-frame means. Same
+ * physical motion, incomparable numbers — so each stream needed its own
+ * range, and nobody ever had the S3-specific walk-by data to set the second
+ * one (it shipped as a copy of S1's, marked "placeholder").
+ *
+ * That metric is now normalized to a fixed wall-clock interval and time
+ * constant (WIFEEL_CSI_JITTER_INTERVAL_MS / _TAU_MS), so both streams report
+ * amplitude change per 250 ms in the same units and one range applies to
+ * both. What differs between them — a sparse stream carries more measurement
+ * noise, since S1 cannot average frames it never received — is a per-stream
+ * OFFSET, and the adaptive floor below already handles offsets.
+ *
+ * UNVALIDATED VALUE: 2.5f is carried over from the pre-fix S1 range purely so
+ * behaviour on S1 stays in the same ballpark while the fix is evaluated. The
+ * metric's scale has changed (it is now per-250 ms rather than per-packet-gap),
+ * so this MUST be re-derived from a fresh empty-room baseline plus deliberate
+ * walk-bys before any conclusion is drawn about the false-positive rate. Do
+ * that per-stream first, per docs/boards.md's explicit instruction not to
+ * touch fusion policy until S1 and S3 are each validated alone. */
+#define MOTION_SCORE_DELTA_RANGE 2.5f
 
 /* Adaptive noise floor: tracks the *resting* jitter level so the score is
  * relative to wherever this network's/room's baseline actually sits,
@@ -89,8 +102,8 @@ static void motion_task(void *arg)
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(MOTION_UPDATE_INTERVAL_MS));
 
-        compute_stream_score(&s_s1, WIFEEL_STREAM_ROUTER_TO_HUB, MOTION_SCORE_DELTA_RANGE_S1);
-        compute_stream_score(&s_s3, WIFEEL_STREAM_DISPLAY_TO_HUB, MOTION_SCORE_DELTA_RANGE_S3);
+        compute_stream_score(&s_s1, WIFEEL_STREAM_ROUTER_TO_HUB, MOTION_SCORE_DELTA_RANGE);
+        compute_stream_score(&s_s3, WIFEEL_STREAM_DISPLAY_TO_HUB, MOTION_SCORE_DELTA_RANGE);
         s_score = (s_s1.score > s_s3.score) ? s_s1.score : s_s3.score;
 
         if (!s_flag && s_score >= MOTION_ENTER_SCORE) {

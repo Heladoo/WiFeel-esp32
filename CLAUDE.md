@@ -27,8 +27,12 @@ otherwise ask the user rather than re-deriving the architecture from scratch.
     struct + a union member; the union's size (and `WIFEEL_PROTO_MAX_LEN`)
     follows the largest member automatically.
   - `wifeel_csi`: the CSI ring buffer and feature extraction
-    (`wifeel_csi_stream_t`) — identical code path on both firmwares for
-    whichever stream(s) that board owns.
+    (`wifeel_csi_stream_t`). Designed to be the identical code path on both
+    firmwares for whichever stream(s) a board owns — but today only
+    `firmware/sense` actually links it, since S2/S4 (the display's own CSI
+    streams) were never built. `firmware/display` requires `wifeel_proto`
+    alone. So a change to `wifeel_csi` currently cannot affect the display.
+    Covered by host tests in `test/host/`.
 - **CSI streams**: the plan's original design has 4 (S1-S4); only two exist
   today. **S1** = router→hub, via the hub's own STA join (`wifi_mgr.c`).
   **S3** = display→hub, via the hub's SoftAP that the display joins as a
@@ -61,7 +65,15 @@ otherwise ask the user rather than re-deriving the architecture from scratch.
 
 - Both boards identified, flashed, and running custom firmware (HUB-1 =
   XIAO C6, DISP-1 = Waveshare AMOLED).
-- P1 (motion, fusing S1+S3 in `motion.c`) is live-tested and working;
+- P1 (motion, fusing S1+S3 in `motion.c`): a **root-cause fix landed
+  2026-09-28** for the empty-room false positives, and it is not yet verified
+  on hardware. The fast-jitter metric was packet-rate dependent, so S1
+  (~3 pkt/s) and S3 (~100 pkt/s) were measuring different physical quantities:
+  in simulation S1 read 6.07x hot for the same motion, and **S3 was nearly
+  blind — 0/10 and 1/10 walk-by detections**. Both now share one threshold and
+  detect 10/10. Every motion/presence number in docs/boards.md predating that
+  fix was measured through this bug. `MOTION_SCORE_DELTA_RANGE` must be
+  re-derived on hardware; the current 2.5 is a carried-over placeholder.
   P3-P5 (people count, breathing, rough position) are not built yet.
 - Display's Home tile shows three top stats (nearby phones, presence,
   motion) plus a gridded 2-series trend chart of S1 vs S3 scores with
@@ -79,8 +91,12 @@ otherwise ask the user rather than re-deriving the architecture from scratch.
   a stuck S1 ping once starved the hub enough to fail the SoftAP's WPA2
   handshake with the display (802.11 reason code 15) — breaking S3 too
   without the hub ever crashing. Side effect on the current test network:
-  it doesn't answer ICMP at all, so S1 CSI is only ~2-5 pkt/s (AP frames
-  only, no ping replies).
+  it doesn't answer ICMP at all, so S1 CSI was only ~2-5 pkt/s (AP frames
+  only, no ping replies). `net_probe.c` (2026-09-28) generates traffic the AP
+  does answer — DNS by default, ARP as an alternative, switchable at runtime
+  with `probe` — because CSI only comes from frames received, so outgoing
+  pings alone produce nothing. Untested on hardware; which method this network
+  answers is the first thing to measure.
 - **Nearby phone detection built end to end**: BLE scanning + Wi-Fi
   client sniffing on the hub (`devices.c`, `ble_scan.c`, `wifi_sniff.c`),
   broadcast to the display (`WIFEEL_MSG_DEVICES`, ~1Hz), rendered on a
@@ -165,7 +181,33 @@ phones                  # nearby-device summary table (BLE + Wi-Fi)
 phones selftest         # runs the BLE/Wi-Fi classifiers against known-good captured
                          # byte samples on-device — closest thing to a regression test
 motion [seconds]        # streams live motion score/jitter, for walk-by tuning
+probe <dns|arp|none>    # switch the S1 traffic generator (see net_probe.h); needed
+                        # because S1 only gets CSI from frames the AP sends US, and
+                        # some networks answer no ICMP at all
 ```
+
+In `status`, the two numbers that matter most for CSI health are the per-stream
+**`frames/bucket`** and **`jitter_span`**. `frames/bucket` at ~1.00 means the
+stream is slower than `WIFEEL_CSI_GRID_HZ` (20), so every frame closes its own
+grid bucket and no noise averaging happens — which dominates the motion
+false-positive rate. Getting S1 above 20 pkt/s is a hard requirement, not a
+nice-to-have; see docs/boards.md's packet-rate sweep.
+
+There IS now a host-side test for the shared CSI component — no ESP-IDF, no
+board, runs in seconds:
+
+```bash
+./test/host/run.sh              # test the working tree
+./test/host/run.sh HEAD~1       # ...plus an older revision, for before/after
+```
+
+It compiles the real `components/wifeel_csi/wifeel_csi.c` against stub ESP
+headers and replicates `motion.c`'s scoring, so it catches arithmetic that
+silently depends on packet arrival rate (exactly the bug that hid there for
+weeks). Run it before any change to bucketing, the grid, or a feature the
+motion/presence thresholds read — it is far cheaper than a flash-and-walk-around
+cycle. It says nothing about whether the metric tracks real human bodies; only
+on-device testing does that.
 
 Drive the console non-interactively from `tools/` (only `pyserial` is
 actually required; `requirements.txt` also lists packages for training

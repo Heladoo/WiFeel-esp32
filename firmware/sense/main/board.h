@@ -6,7 +6,7 @@
 /** Bump on every behavior change — printed in the boot banner and reported
  *  in wifeel_msg_state_t.fw_version so the display and serial logs always
  *  show what's actually running (see CLAUDE.md's flashing conventions). */
-#define WIFEEL_SENSE_FW_VERSION "0.1.0-dev"
+#define WIFEEL_SENSE_FW_VERSION "0.2.0-dev"
 
 /**
  * Board-specific bring-up: on the Seeed XIAO ESP32-C6, selects the

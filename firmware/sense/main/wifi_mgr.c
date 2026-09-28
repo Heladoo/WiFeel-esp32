@@ -217,6 +217,11 @@ esp_err_t wifi_mgr_get_ap_channel(uint8_t *channel_out)
     return ESP_OK;
 }
 
+esp_netif_t *wifi_mgr_get_sta_netif(void)
+{
+    return s_sta_netif;
+}
+
 esp_err_t wifi_mgr_get_gateway_ip(esp_ip4_addr_t *gw_out)
 {
     if (!s_connected || !s_sta_netif) {

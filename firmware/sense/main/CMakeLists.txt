@@ -5,6 +5,7 @@ idf_component_register(
         "wifi_mgr.c"
         "csi_mgr.c"
         "ping_gw.c"
+        "net_probe.c"
         "espnow_rx_test.c"
         "motion.c"
         "presence.c"

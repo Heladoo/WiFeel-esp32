@@ -15,11 +15,19 @@ static const char *TAG = "presence";
 
 /* How far above baseline (wifeel_msg_features_t.wander, same units as
  * mean_amp — see wifeel_csi.h) counts as "someone's there". Separate per
- * stream, same reasoning as motion.c's MOTION_SCORE_DELTA_RANGE_S1/_S3:
- * S1 and S3 have different absolute signal scales (different physical
- * path — router is farther/weaker, the hub<->display SoftAP link is
+ * stream because S1 and S3 have different absolute signal scales (different
+ * physical path — router is farther/weaker, the hub<->display SoftAP link is
  * short-range/strong), so one shared threshold likely wouldn't transfer
- * cleanly between them, matching what was found for motion's jitter.
+ * cleanly between them.
+ *
+ * NOTE: motion.c used to split its threshold per stream too, but for a
+ * different reason that has since been fixed at the source — its jitter
+ * metric was packet-rate dependent, so it now uses a single shared
+ * MOTION_SCORE_DELTA_RANGE. That fix does NOT apply here: `wander` is a
+ * LEVEL (mean amplitude over the 2s ring window, minus the calibrated
+ * baseline), not a difference between samples, so it never carried the
+ * rate dependence. The split below stands on the signal-scale argument
+ * alone.
  * BOTH VALUES ARE PLACEHOLDERS — reasoned from the wander metric's
  * definition and motion.c's calibrated jitter scale, not yet validated
  * against a real "person sitting still nearby" test. Tune once that test
