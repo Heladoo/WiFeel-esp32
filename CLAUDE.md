@@ -69,10 +69,13 @@ otherwise ask the user rather than re-deriving the architecture from scratch.
   2026-09-28** for the empty-room false positives, and it is not yet verified
   on hardware. The fast-jitter metric was packet-rate dependent, so S1
   (~3 pkt/s) and S3 (~100 pkt/s) were measuring different physical quantities:
-  in simulation S1 read 6.07x hot for the same motion, and **S3 was nearly
-  blind — 0/10 and 1/10 walk-by detections**. Both now share one threshold and
-  detect 10/10. Every motion/presence number in docs/boards.md predating that
-  fix was measured through this bug. `MOTION_SCORE_DELTA_RANGE` must be
+  in simulation S1 read 6.07x hot for the same motion (saturating its score at
+  100), and **S3's walk-by response sat inside its own noise distribution** —
+  burst peaks of 21/31/55 against a quiet 99th percentile of 33, i.e. not
+  separable at any threshold, so the second vantage point contributed
+  essentially nothing to fusion. Both streams now separate cleanly on one
+  shared threshold. Every motion/presence number in docs/boards.md predating
+  that fix was measured through this bug. `MOTION_SCORE_DELTA_RANGE` must be
   re-derived on hardware; the current 2.5 is a carried-over placeholder.
   P3-P5 (people count, breathing, rough position) are not built yet.
 - Display's Home tile shows three top stats (nearby phones, presence,

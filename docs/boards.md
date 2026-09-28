@@ -993,6 +993,16 @@ feeds two streams the *same* synthetic channel at 3 pkt/s and 100 pkt/s, and
 replicates `motion.c`'s scoring exactly. Reproduce with
 `./test/host/run.sh <old-rev>`.
 
+**What this can and cannot show.** The channel is synthetic: a resting
+amplitude, a coherent sinusoidal swing standing in for a body moving through
+the path, and Gaussian per-frame measurement noise. The noise model is
+invented — real CSI noise is not Gaussian, is correlated between frames, and
+carries multipath and rate-adaptation structure. So the absolute false-positive
+counts are illustrative, not predictive of this room. What IS robust is
+anything structural, because it does not depend on the chosen amplitudes: the
+6.07x rate ratio, the 20 pkt/s crossover, and whether a stream's motion
+response separates from its own noise. Those are properties of the arithmetic.
+
 Rate-independence — same physical motion, ratio should be 1.0x:
 
 | case | before | after |
@@ -1020,15 +1030,55 @@ Empty-room false positives and walk-by detection, one shared threshold
 | 2.2% — before | 143 | 10/10 | 157 | 8/10 |
 | 2.2% — after | **100** | 10/10 | **33** | **10/10** |
 
-**The biggest finding is not the false positives — it is that S3 was nearly
-blind.** 0/10 and 1/10 detections at realistic noise. It only ever "responded"
-at high noise, where it was also false-positiving wildly. That matches the
-note above that S3's score "reads persistently low even during real motion",
-but the magnitude is worse than suspected: S3 was contributing essentially
-nothing to fusion. After the fix it detects 10/10 at every noise level. So
-the second sensing vantage point has, in practice, not been working at all
-until now — and every conclusion drawn from "S1 dominated over S3" was
-measuring this bug, not the room.
+**Caveat on that detection column — it is confounded, and was initially
+over-claimed here.** A burst counts as "detected" if `motion.c`'s flag is up
+at any tick inside its 4 s window, whatever raised it. A stream with ~100
+false events per 10 min has the flag up roughly every 6 s, which makes a 4 s
+window nearly a free hit. So the detection figures are only meaningful in
+rows where the adjacent false-positive count is near zero (the after-fix
+0.6%/1.1% rows), and S1's "10/10" at 2.2% noise says almost nothing.
+
+### The threshold-free version (this is the number to trust)
+
+`test/host/separation.c` avoids both the threshold and that confound: within
+one run, it collects the peak score during each walk-by burst and the
+distribution of scores while the room is quiet, and asks whether the quietest
+burst peak clears the 99th percentile of quiet scores. If they overlap, NO
+threshold works and any "detection rate" is really reporting the
+false-positive rate. 20 bursts, scores on `motion.c`'s 0-100 scale:
+
+| noise | stream | quiet p50/p95/p99/max | burst peak min/med/max | separable |
+|---|---|---|---|---|
+| 0.6% | S1 before | 7 / 25 / 33 / 48 | 96 / 100 / 100 | yes |
+| 0.6% | S1 after | 4 / 17 / 22 / 33 | 67 / 84 / 100 | yes |
+| 0.6% | S3 before | 4 / 12 / 16 / 22 | **20 / 27 / 30** | barely |
+| 0.6% | S3 after | 2 / 8 / 11 / 15 | **73 / 92 / 96** | yes |
+| 1.1% | S1 before | 15 / 52 / 67 / 96 | 83 / 100 / 100 | yes |
+| 1.1% | S1 after | 9 / 34 / 44 / 65 | 55 / 83 / 100 | yes |
+| 1.1% | S3 before | 8 / 24 / 33 / 44 | **21 / 31 / 55** | **no — overlap** |
+| 1.1% | S3 after | 5 / 17 / 23 / 31 | **73 / 89 / 96** | yes |
+| 2.2% | S1 before | 30 / 100 / 100 / 100 | 71 / 100 / 100 | no — overlap |
+| 2.2% | S1 after | 20 / 68 / 89 / 100 | 44 / 100 / 100 | **no — overlap** |
+| 2.2% | S3 before | 16 / 49 / 66 / 89 | 24 / 53 / 100 | no — overlap |
+| 2.2% | S3 after | 11 / 34 / 46 / 63 | 71 / 84 / 97 | yes |
+
+This is the precise, defensible form of the claim:
+
+- **S3's walk-by response used to sit inside its own noise distribution** —
+  burst peaks of 21/31/55 against a quiet p99 of 33 at 1.1% noise. Not merely
+  "below the threshold": *unseparable at any threshold*. With the shipped
+  `MOTION_ENTER_SCORE` of 40, only the strongest burst in ten ever crossed.
+  That is the real content of "S3 reads persistently low even during real
+  motion", and it means the second sensing vantage point contributed
+  essentially nothing to fusion. After the fix S3 separates cleanly at every
+  noise level tested — burst peaks 71-96 against a quiet p99 of 11-46.
+- **S1 always worked**, and still does; its problem was never detection but
+  over-sensitivity. Before the fix its burst peaks pinned at 100 (the 6x
+  inflation saturating the score); after, they land at 55-100 with a lower
+  quiet distribution. It remains the stream that loses separability first as
+  noise rises (2.2% row) — because at 3 pkt/s it has one frame per bucket and
+  nothing to average. That is the packet-rate problem, not the metric.
+- So "S1 dominated over S3" was measuring this bug, not the room.
 
 ### What changed
 

@@ -20,7 +20,7 @@ trap 'rm -rf "$work"' EXIT
 build_and_run() {  # <label> <wifeel_csi.c> <include dir> [extra cflags]
   local label="$1" src="$2" inc="$3"; shift 3
   echo "########## $label ##########"
-  for t in rate_independence false_positives; do
+  for t in rate_independence false_positives separation; do
     gcc -O1 -Wall -Wextra -o "$work/$t" "$here/$t.c" "$src" \
         -I "$inc" -I "$here/stubs" -I "$root/components/wifeel_proto/include" \
         "$@" -lm
