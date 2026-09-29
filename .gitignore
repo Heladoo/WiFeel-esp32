@@ -25,7 +25,8 @@ data/*
 Thumbs.db
 
 # Claude Code session-local state (lock files etc.) — not project content
-.claude/
+.claude/*
+!.claude/skills/
 
 # Logs
 *.log
