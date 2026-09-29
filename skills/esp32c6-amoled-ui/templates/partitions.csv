@@ -1,0 +1,6 @@
+# Name,     Type, SubType,   Offset,   Size,      Flags
+# Layout matches Waveshare's own confirmed-working partitions.csv for this
+# board (16MB flash) — offsets auto-placed.
+nvs,        data, nvs,       ,         0x6000,
+phy_init,   data, phy,       ,         0x1000,
+factory,    app,  factory,   ,         8M,
